@@ -73,7 +73,7 @@ export function VideoLanding({slug}:{slug:string}){
   if(!page)return <main className="video-shell"><div className="video-page"><section className="card"><h1>Analyse nicht verfügbar</h1><p className="muted">Dieser Link ist nicht mehr aktiv.</p></section></div></main>;
   const pct=Math.min(100,Math.round((elapsed/page.duration_seconds)*100));
   const domain=page.website_url?new URL(page.website_url.startsWith("http")?page.website_url:`https://${page.website_url}`).hostname:"Unternehmenswebsite";
-  const previewUrl=page.website_url?`/api/site-preview?url=${encodeURIComponent(page.website_url)}`:null;
+  const previewUrl=page.website_url?`/api/site-preview?slug=${encodeURIComponent(slug)}`:null;
 
   return <main className="video-shell"><div className="video-page">
     <header className="topbar"><div className="brand"><div className="logo">W</div><div><div className="eyebrow">Walkenhorst Energie</div><strong>Persönliche Potenzialanalyse</strong></div></div><span className="badge"><span className="dot"/>für {page.company_name}</span></header>
