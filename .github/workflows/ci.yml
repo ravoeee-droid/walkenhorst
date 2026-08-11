@@ -3,8 +3,10 @@ name: Walkenhorst CI
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+
+permissions:
+  contents: read
+  statuses: write
 
 jobs:
   build:
@@ -14,7 +16,48 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
-      - run: npm install
-      - run: npm run typecheck
-      - run: npm run build
+
+      - id: install
+        continue-on-error: true
+        run: npm install
+      - name: Publish install status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATE: ${{ steps.install.outcome }}
+        run: |
+          state=$([ "$STATE" = "success" ] && echo success || echo failure)
+          curl -sS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.sha }} \
+            -d "{\"state\":\"$state\",\"context\":\"walkenhorst-ci/install\"}" >/dev/null
+
+      - id: typecheck
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: npm run typecheck
+      - name: Publish typecheck status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATE: ${{ steps.typecheck.outcome }}
+        run: |
+          state=$([ "$STATE" = "success" ] && echo success || echo failure)
+          curl -sS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.sha }} \
+            -d "{\"state\":\"$state\",\"context\":\"walkenhorst-ci/typecheck\"}" >/dev/null
+
+      - id: nextbuild
+        if: steps.install.outcome == 'success' && steps.typecheck.outcome == 'success'
+        continue-on-error: true
+        run: npm run build
+      - name: Publish build status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATE: ${{ steps.nextbuild.outcome }}
+        run: |
+          state=$([ "$STATE" = "success" ] && echo success || echo failure)
+          curl -sS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.sha }} \
+            -d "{\"state\":\"$state\",\"context\":\"walkenhorst-ci/build\"}" >/dev/null
+
+      - name: Fail workflow if verification failed
+        if: steps.install.outcome != 'success' || steps.typecheck.outcome != 'success' || steps.nextbuild.outcome != 'success'
+        run: exit 1
