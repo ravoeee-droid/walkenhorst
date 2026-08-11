@@ -20,6 +20,7 @@ type VideoPage = {
 
 export function VideoLanding({slug}:{slug:string}){
   const supabase=useMemo(()=>createSupabaseBrowserClient(),[]);
+  const presenterRef=useRef<HTMLVideoElement|null>(null);
   const [page,setPage]=useState<VideoPage|null>(null);
   const [loading,setLoading]=useState(true);
   const [playing,setPlaying]=useState(false);
@@ -28,10 +29,13 @@ export function VideoLanding({slug}:{slug:string}){
 
   useEffect(()=>{
     if(!supabase){setLoading(false);return;}
-    void supabase.from("energy_video_pages").select("id,company_name,prospect_name,website_url,presenter_video_url,headline,intro_text,bullets,cta_label,cta_url,duration_seconds,status").eq("slug",slug).eq("is_public",true).single().then(async({data,error})=>{
-      if(!error&&data){setPage(data as VideoPage);await supabase.from("energy_video_events").insert({video_page_id:data.id,event_type:"view"});}
-      setLoading(false);
-    });
+    void supabase.from("energy_video_pages")
+      .select("id,company_name,prospect_name,website_url,presenter_video_url,headline,intro_text,bullets,cta_label,cta_url,duration_seconds,status")
+      .eq("slug",slug).eq("is_public",true).in("status",["ready","sent"]).single()
+      .then(async({data,error})=>{
+        if(!error&&data){setPage(data as VideoPage);await supabase.from("energy_video_events").insert({video_page_id:data.id,event_type:"view"});}
+        setLoading(false);
+      });
   },[slug,supabase]);
 
   useEffect(()=>{
@@ -49,24 +53,40 @@ export function VideoLanding({slug}:{slug:string}){
         void supabase?.from("energy_video_events").insert({video_page_id:page.id,event_type:"progress",watch_percent:mark});
       }
     }
-    if(percent>=100)setPlaying(false);
+    if(percent>=100){setPlaying(false);presenterRef.current?.pause();}
   },[elapsed,page,supabase]);
 
-  async function play(){if(!page)return;setPlaying(true);if(elapsed>=page.duration_seconds)setElapsed(0);await supabase?.from("energy_video_events").insert({video_page_id:page.id,event_type:"play",watch_percent:Math.round((elapsed/page.duration_seconds)*100)});}
-  async function cta(){if(!page)return;await supabase?.from("energy_video_events").insert({video_page_id:page.id,event_type:"cta_click",watch_percent:Math.round((elapsed/page.duration_seconds)*100)});if(page.cta_url)window.location.href=page.cta_url;}
+  async function play(){
+    if(!page)return;
+    if(elapsed>=page.duration_seconds){setElapsed(0);sentMarks.current.clear();}
+    setPlaying(true);
+    if(presenterRef.current){presenterRef.current.currentTime=0;await presenterRef.current.play().catch(()=>undefined);}
+    await supabase?.from("energy_video_events").insert({video_page_id:page.id,event_type:"play",watch_percent:Math.round((elapsed/page.duration_seconds)*100)});
+  }
+  async function cta(){
+    if(!page)return;
+    await supabase?.from("energy_video_events").insert({video_page_id:page.id,event_type:"cta_click",watch_percent:Math.round((elapsed/page.duration_seconds)*100)});
+    if(page.cta_url)window.location.href=page.cta_url;
+  }
 
   if(loading)return <main className="video-shell"><div className="video-page"><section className="card">Analyse wird geladen …</section></div></main>;
   if(!page)return <main className="video-shell"><div className="video-page"><section className="card"><h1>Analyse nicht verfügbar</h1><p className="muted">Dieser Link ist nicht mehr aktiv.</p></section></div></main>;
   const pct=Math.min(100,Math.round((elapsed/page.duration_seconds)*100));
   const domain=page.website_url?new URL(page.website_url.startsWith("http")?page.website_url:`https://${page.website_url}`).hostname:"Unternehmenswebsite";
+  const previewUrl=page.website_url?`/api/site-preview?url=${encodeURIComponent(page.website_url)}`:null;
 
   return <main className="video-shell"><div className="video-page">
     <header className="topbar"><div className="brand"><div className="logo">W</div><div><div className="eyebrow">Walkenhorst Energie</div><strong>Persönliche Potenzialanalyse</strong></div></div><span className="badge"><span className="dot"/>für {page.company_name}</span></header>
     <section className="card hero"><div className="eyebrow">{page.prospect_name?`Für ${page.prospect_name}`:"Kurze Video-Analyse"}</div><h1>{page.headline}</h1><p className="muted">{page.intro_text}</p></section>
-    <section className="video-stage" style={{marginTop:18}}>
-      <div className="video-site"><div className="fake-browser"><div className="browser-bar"><span className="browser-dot"/><span className="browser-dot"/><span className="browser-dot"/><span style={{marginLeft:10,fontSize:12,color:"#5b6862"}}>{domain}</span></div><div className="site-content"><div className="eyebrow" style={{color:"#247653"}}>Unternehmensanalyse</div><h3>{page.company_name}</h3><p>Wir haben Website, Unternehmensprofil und relevante Energie-Signale für einen ersten Potenzialcheck zusammengeführt.</p><div className="site-block"/><div className="site-block" style={{height:140}}/><div className="site-block"/><h3 style={{fontSize:25}}>Energiepotenzial sichtbar machen</h3><div className="site-block" style={{height:125}}/></div></div></div>
+    <section className={`video-stage ${playing?"is-playing":""}`} style={{marginTop:18}}>
+      <div className="video-site">
+        <div className="fake-browser">
+          <div className="browser-bar"><span className="browser-dot"/><span className="browser-dot"/><span className="browser-dot"/><span style={{marginLeft:10,fontSize:12,color:"#5b6862"}}>{domain}</span></div>
+          {previewUrl?<div className="prospect-preview-pan"><iframe className="prospect-preview-frame" src={previewUrl} sandbox="" referrerPolicy="no-referrer" title={`Website ${page.company_name}`}/></div>:<div className="site-content"><div className="eyebrow" style={{color:"#247653"}}>Unternehmensanalyse</div><h3>{page.company_name}</h3><p>Wir haben Unternehmensprofil und relevante Energie-Signale für einen ersten Potenzialcheck zusammengeführt.</p><div className="site-block"/><div className="site-block" style={{height:140}}/><div className="site-block"/></div>}
+        </div>
+      </div>
       <div className="video-overlay">{playing?`Analyse läuft · ${pct}%`:`${Math.floor(page.duration_seconds/60)}:${String(page.duration_seconds%60).padStart(2,"0")} Min.`}</div>
-      <div className="presenter">{page.presenter_video_url?<video src={page.presenter_video_url} autoPlay={playing} muted playsInline loop/>:"W"}</div>
+      <div className="presenter">{page.presenter_video_url?<video ref={presenterRef} src={page.presenter_video_url} playsInline loop preload="metadata"/>:"W"}</div>
       {!playing&&<button className="play" onClick={()=>void play()} aria-label="Video starten">▶</button>}
       <div className="video-progress"><span style={{width:`${pct}%`}}/></div>
     </section>
