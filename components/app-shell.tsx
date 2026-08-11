@@ -1,8 +1,8 @@
 "use client";
 
 import { AuthGate } from "@/components/auth-gate";
-import { EnergyRadarApp } from "@/components/energy-radar-app";
+import { OutboundDashboard } from "@/components/outbound-dashboard";
 
 export function AppShell() {
-  return <AuthGate>{(user) => <EnergyRadarApp user={user} />}</AuthGate>;
+  return <AuthGate>{(user) => <OutboundDashboard user={user} />}</AuthGate>;
 }
