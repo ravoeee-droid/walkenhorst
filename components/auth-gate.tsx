@@ -4,6 +4,23 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
 
+function getAppUrl() {
+  const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL ?? process.env.NEXT_PUBLIC_VERCEL_URL;
+  let url = configuredUrl ?? (typeof window !== "undefined" ? window.location.origin : "");
+
+  if (!url) return undefined;
+  if (!url.startsWith("http://") && !url.startsWith("https://")) {
+    url = `https://${url}`;
+  }
+
+  return url.replace(/\/$/, "");
+}
+
+function getAuthRedirectUrl() {
+  const appUrl = getAppUrl();
+  return appUrl ? `${appUrl}/dashboard` : undefined;
+}
+
 export function AuthGate({ children }: { children: (user: User) => React.ReactNode }) {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const [user, setUser] = useState<User | null>(null);
@@ -17,6 +34,22 @@ export function AuthGate({ children }: { children: (user: User) => React.ReactNo
     if (!supabase) {
       setLoading(false);
       return;
+    }
+
+    if (typeof window !== "undefined" && window.location.hash) {
+      const authParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+      const authError = authParams.get("error_description");
+      const authErrorCode = authParams.get("error_code");
+
+      if (authErrorCode === "otp_expired") {
+        setError("Der Bestätigungslink ist abgelaufen oder wurde bereits verwendet. Bitte sende unten eine neue Bestätigungs-E-Mail.");
+      } else if (authError) {
+        setError(authError.replace(/\+/g, " "));
+      }
+
+      if (authErrorCode || authError) {
+        window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+      }
     }
 
     void supabase.auth.getSession().then(({ data }) => {
@@ -67,7 +100,7 @@ export function AuthGate({ children }: { children: (user: User) => React.ReactNo
       email,
       password,
       options: {
-        emailRedirectTo: typeof window !== "undefined" ? `${window.location.origin}/dashboard` : undefined,
+        emailRedirectTo: getAuthRedirectUrl(),
       },
     });
     setLoading(false);
@@ -83,7 +116,7 @@ export function AuthGate({ children }: { children: (user: User) => React.ReactNo
     }
 
     setMode("signin");
-    setNotice("Account angelegt. Bitte bestätige jetzt die E-Mail. Erst danach wird eine echte Session erstellt und RLS erlaubt CRM-Zugriffe.");
+    setNotice("Account angelegt. Bitte bestätige jetzt die E-Mail. Danach wirst du direkt zurück ins Walkenhorst Radar geleitet.");
   }
 
   async function resendConfirmation() {
@@ -93,16 +126,17 @@ export function AuthGate({ children }: { children: (user: User) => React.ReactNo
     }
     setLoading(true);
     setError(null);
+    setNotice(null);
     const { error: resendError } = await supabase.auth.resend({
       type: "signup",
       email: lastEmail,
       options: {
-        emailRedirectTo: typeof window !== "undefined" ? `${window.location.origin}/dashboard` : undefined,
+        emailRedirectTo: getAuthRedirectUrl(),
       },
     });
     setLoading(false);
     if (resendError) setError(resendError.message);
-    else setNotice("Bestätigungs-E-Mail wurde erneut gesendet.");
+    else setNotice("Neue Bestätigungs-E-Mail wurde gesendet. Bitte verwende nur den neuesten Link.");
   }
 
   if (!supabase) {
