@@ -5,7 +5,10 @@ import type { User } from "@supabase/supabase-js";
 import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
 
 function getAppUrl() {
-  const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL ?? process.env.NEXT_PUBLIC_VERCEL_URL;
+  const configuredUrl =
+    process.env.NEXT_PUBLIC_SITE_URL ??
+    process.env.NEXT_PUBLIC_VERCEL_PROJECT_PRODUCTION_URL ??
+    process.env.NEXT_PUBLIC_VERCEL_URL;
   let url = configuredUrl ?? (typeof window !== "undefined" ? window.location.origin : "");
 
   if (!url) return undefined;
@@ -21,6 +24,27 @@ function getAuthRedirectUrl() {
   return appUrl ? `${appUrl}/dashboard` : undefined;
 }
 
+function isLocalUrl(url?: string) {
+  if (!url) return false;
+  try {
+    const hostname = new URL(url).hostname;
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+  } catch {
+    return false;
+  }
+}
+
+function readableAuthError(message: string) {
+  const normalized = message.toLowerCase();
+  if (normalized.includes("email rate limit exceeded") || normalized.includes("over_email_send_rate_limit")) {
+    return "Das Supabase-Mail-Limit ist gerade erreicht. Bitte nicht mehrfach klicken. Warte bis das Limit zurückgesetzt ist und sende dann genau eine neue Bestätigungs-E-Mail.";
+  }
+  if (normalized.includes("email not confirmed")) {
+    return "Deine E-Mail ist noch nicht bestätigt. Bitte bestätige den neuesten Link aus der Supabase-Mail oder sende unten eine neue Bestätigung.";
+  }
+  return message;
+}
+
 export function AuthGate({ children }: { children: (user: User) => React.ReactNode }) {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const [user, setUser] = useState<User | null>(null);
@@ -29,6 +53,7 @@ export function AuthGate({ children }: { children: (user: User) => React.ReactNo
   const [notice, setNotice] = useState<string | null>(null);
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [lastEmail, setLastEmail] = useState("");
+  const [resendCooldown, setResendCooldown] = useState(0);
 
   useEffect(() => {
     if (!supabase) {
@@ -42,9 +67,9 @@ export function AuthGate({ children }: { children: (user: User) => React.ReactNo
       const authErrorCode = authParams.get("error_code");
 
       if (authErrorCode === "otp_expired") {
-        setError("Der Bestätigungslink ist abgelaufen oder wurde bereits verwendet. Bitte sende unten eine neue Bestätigungs-E-Mail.");
+        setError("Der Bestätigungslink ist abgelaufen oder wurde bereits verwendet. Bitte verwende nur den neuesten Link oder sende eine neue Bestätigungs-E-Mail.");
       } else if (authError) {
-        setError(authError.replace(/\+/g, " "));
+        setError(readableAuthError(authError.replace(/\+/g, " ")));
       }
 
       if (authErrorCode || authError) {
@@ -65,6 +90,14 @@ export function AuthGate({ children }: { children: (user: User) => React.ReactNo
     return () => listener.subscription.unsubscribe();
   }, [supabase]);
 
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const timer = window.setInterval(() => {
+      setResendCooldown((value) => (value > 0 ? value - 1 : 0));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [resendCooldown]);
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!supabase) return;
@@ -81,11 +114,7 @@ export function AuthGate({ children }: { children: (user: User) => React.ReactNo
       const result = await supabase.auth.signInWithPassword({ email, password });
       setLoading(false);
       if (result.error) {
-        setError(
-          result.error.message.toLowerCase().includes("email not confirmed")
-            ? "Deine E-Mail ist noch nicht bestätigt. Bitte bestätige den Link aus der Supabase-Mail oder sende unten eine neue Bestätigung."
-            : result.error.message,
-        );
+        setError(readableAuthError(result.error.message));
         return;
       }
       if (!result.data.session) {
@@ -96,17 +125,24 @@ export function AuthGate({ children }: { children: (user: User) => React.ReactNo
       return;
     }
 
+    const redirectUrl = getAuthRedirectUrl();
+    if (typeof window !== "undefined" && isLocalUrl(window.location.origin) && isLocalUrl(redirectUrl)) {
+      setLoading(false);
+      setError("Account-Erstellung über localhost ist deaktiviert, damit Supabase keine falschen Bestätigungslinks mehr verschickt. Bitte erstelle neue Accounts in der produktiven Walkenhorst-Version auf Vercel.");
+      return;
+    }
+
     const result = await supabase.auth.signUp({
       email,
       password,
       options: {
-        emailRedirectTo: getAuthRedirectUrl(),
+        emailRedirectTo: redirectUrl,
       },
     });
     setLoading(false);
 
     if (result.error) {
-      setError(result.error.message);
+      setError(readableAuthError(result.error.message));
       return;
     }
 
@@ -116,7 +152,7 @@ export function AuthGate({ children }: { children: (user: User) => React.ReactNo
     }
 
     setMode("signin");
-    setNotice("Account angelegt. Bitte bestätige jetzt die E-Mail. Danach wirst du direkt zurück ins Walkenhorst Radar geleitet.");
+    setNotice("Account angelegt. Bitte bestätige jetzt die neueste E-Mail. Danach wirst du direkt zurück ins Walkenhorst Radar geleitet.");
   }
 
   async function resendConfirmation() {
@@ -124,6 +160,15 @@ export function AuthGate({ children }: { children: (user: User) => React.ReactNo
       setError("Bitte zuerst deine E-Mail-Adresse im Formular eingeben.");
       return;
     }
+    if (resendCooldown > 0) return;
+
+    const redirectUrl = getAuthRedirectUrl();
+    if (typeof window !== "undefined" && isLocalUrl(window.location.origin) && isLocalUrl(redirectUrl)) {
+      setError("Von localhost werden keine Bestätigungs-Mails mehr verschickt. Öffne dafür die produktive Walkenhorst-Version auf Vercel.");
+      return;
+    }
+
+    setResendCooldown(60);
     setLoading(true);
     setError(null);
     setNotice(null);
@@ -131,12 +176,12 @@ export function AuthGate({ children }: { children: (user: User) => React.ReactNo
       type: "signup",
       email: lastEmail,
       options: {
-        emailRedirectTo: getAuthRedirectUrl(),
+        emailRedirectTo: redirectUrl,
       },
     });
     setLoading(false);
-    if (resendError) setError(resendError.message);
-    else setNotice("Neue Bestätigungs-E-Mail wurde gesendet. Bitte verwende nur den neuesten Link.");
+    if (resendError) setError(readableAuthError(resendError.message));
+    else setNotice("Neue Bestätigungs-E-Mail wurde gesendet. Bitte verwende ausschließlich den neuesten Link.");
   }
 
   if (!supabase) {
@@ -182,8 +227,8 @@ export function AuthGate({ children }: { children: (user: User) => React.ReactNo
             {mode === "signin" ? "Ersten Account erstellen" : "Zur Anmeldung"}
           </button>
           {mode === "signin" && (
-            <button className="auth-link" type="button" onClick={() => void resendConfirmation()}>
-              Bestätigungs-E-Mail erneut senden
+            <button className="auth-link" type="button" disabled={resendCooldown > 0} onClick={() => void resendConfirmation()}>
+              {resendCooldown > 0 ? `Erneut senden (${resendCooldown}s)` : "Bestätigungs-E-Mail erneut senden"}
             </button>
           )}
         </form>
