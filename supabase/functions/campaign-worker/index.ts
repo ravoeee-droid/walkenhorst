@@ -1,0 +1,223 @@
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "npm:@supabase/supabase-js@2";
+import nodemailer from "npm:nodemailer@7";
+
+const RESPONSE_HEADERS = {
+  "content-type": "application/json",
+  "cache-control": "no-store",
+  "access-control-allow-origin": "*",
+  "access-control-allow-headers": "authorization, content-type, x-worker-key",
+};
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), { status, headers: RESPONSE_HEADERS });
+}
+
+function envKeys() {
+  const url = Deno.env.get("SUPABASE_URL");
+  const publishableSet = Deno.env.get("SUPABASE_PUBLISHABLE_KEYS");
+  const secretSet = Deno.env.get("SUPABASE_SECRET_KEYS");
+  const publicKey = publishableSet ? JSON.parse(publishableSet)?.default : Deno.env.get("SUPABASE_ANON_KEY");
+  const secretKey = secretSet ? JSON.parse(secretSet)?.default : Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!url || !publicKey || !secretKey) throw new Error("Backend configuration missing");
+  return { url, publicKey, secretKey };
+}
+
+function adminClient() {
+  const { url, secretKey } = envKeys();
+  return createClient(url, secretKey, { auth: { persistSession: false, autoRefreshToken: false } });
+}
+
+type DB = ReturnType<typeof adminClient>;
+
+async function getRequestUser(req: Request) {
+  const authorization = req.headers.get("authorization") || "";
+  const token = authorization.toLowerCase().startsWith("bearer ") ? authorization.slice(7).trim() : "";
+  if (!token) return null;
+  const { url, publicKey } = envKeys();
+  const scoped = createClient(url, publicKey, { auth: { persistSession: false, autoRefreshToken: false } });
+  const { data, error } = await scoped.auth.getUser(token);
+  return error ? null : data.user;
+}
+
+async function authorize(req: Request, db: DB) {
+  const user = await getRequestUser(req);
+  if (user) return { ok: true as const, userId: user.id };
+  const supplied = req.headers.get("x-worker-key") || "";
+  if (!supplied) return { ok: false as const, userId: null };
+  const { data } = await db.rpc("energy_get_system_secret", { p_name: "energy_worker_key" });
+  if (!data || data !== supplied) return { ok: false as const, userId: null };
+  return { ok: true as const, userId: null };
+}
+
+function firstName(value: string | null | undefined) {
+  return String(value || "").trim().split(/\s+/)[0] || "";
+}
+
+function personalize(template: string, lead: any, videoUrl: string) {
+  return template
+    .replaceAll("{{firstname}}", firstName(lead.contact_name))
+    .replaceAll("{{company}}", lead.company_name || "")
+    .replaceAll("{{city}}", lead.city || "")
+    .replaceAll("{{industry}}", lead.industry || "")
+    .replaceAll("{{opportunity}}", String(lead.total_score ?? 0))
+    .replaceAll("{{reason}}", lead.summary || lead.next_action || "ein interessantes Energie- und PV-Potenzial")
+    .replaceAll("{{video_url}}", videoUrl || "");
+}
+
+function escapeHtml(value: string) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;");
+}
+
+function toHtml(text: string, base: string, token: string) {
+  const linked = escapeHtml(text)
+    .replace(/https?:\/\/[^\s&lt;&gt;]+/g, (url) => `<a href="${base}/api/t/c/${token}?url=${encodeURIComponent(url)}">${url}</a>`)
+    .replace(/\n/g, "<br>");
+  return `<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.6;color:#151515">${linked}<br><br><span style="font-size:11px;color:#888">Kein Interesse? <a href="${base}/u/${token}">Abmelden</a></span><img src="${base}/api/t/o/${token}" width="1" height="1" alt="" style="display:none"></div>`;
+}
+
+function timeToMinutes(value: string) {
+  const [hours, minutes] = String(value || "00:00").split(":").map(Number);
+  return (hours || 0) * 60 + (minutes || 0);
+}
+
+function currentLocalMinutes(timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone, hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date());
+  const hours = Number(parts.find((part) => part.type === "hour")?.value || 0);
+  const minutes = Number(parts.find((part) => part.type === "minute")?.value || 0);
+  return hours * 60 + minutes;
+}
+
+function isInsideWindow(campaign: any) {
+  const now = currentLocalMinutes(campaign.timezone || "Europe/Berlin");
+  const start = timeToMinutes(campaign.send_window_start || "08:30");
+  const end = timeToMinutes(campaign.send_window_end || "17:30");
+  return start <= end ? now >= start && now <= end : now >= start || now <= end;
+}
+
+function scheduledIn(hours: number) {
+  return new Date(Date.now() + Math.max(0, Number(hours) || 0) * 3_600_000).toISOString();
+}
+
+async function getSmtpPassword(db: DB, mailbox: any, userId: string) {
+  const { data, error } = await db.rpc("energy_get_mailbox_secrets", { p_mailbox_id: mailbox.id, p_user_id: userId });
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  return row?.smtp_password || "";
+}
+
+async function ensureVideo(db: DB, lead: any, userId: string, baseUrl: string) {
+  const { data: existing } = await db.from("energy_video_pages").select("id,slug").eq("lead_id", lead.id).eq("user_id", userId).in("status", ["ready", "sent"]).limit(1).maybeSingle();
+  if (existing) return `${baseUrl}/v/${existing.slug}`;
+  const prefix = String(lead.company_name || "analyse").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 46);
+  const slug = `${prefix || "analyse"}-${crypto.randomUUID().slice(0, 6)}`;
+  const { error } = await db.from("energy_video_pages").insert({
+    user_id: userId, lead_id: lead.id, slug, company_name: lead.company_name, prospect_name: lead.contact_name, website_url: lead.website,
+    headline: `Kurze Energie-Analyse für ${lead.company_name}`, intro_text: lead.summary,
+    bullets: [`${lead.pv_score || 0}/100 PV-Potenzial`, `${lead.energy_score || 0}/100 Energieeffizienz-Potenzial`, lead.summary || "Individueller Energie-Potenzialcheck"],
+    cta_label: "Kostenlosen Potenzialcheck vereinbaren", cta_url: "https://www.walkenhorst-eko.de/", duration_seconds: 97, status: "ready", is_public: true,
+  });
+  if (error) throw error;
+  return `${baseUrl}/v/${slug}`;
+}
+
+async function advanceMember(db: DB, member: any, steps: any[]) {
+  const next = steps.find((step) => Number(step.step_order) === Number(member.current_step) + 1 && step.active !== false);
+  if (!next) {
+    await db.from("energy_campaign_members").update({ status: "completed", last_step_at: new Date().toISOString(), next_step_at: null, updated_at: new Date().toISOString() }).eq("id", member.id);
+    return;
+  }
+  await db.from("energy_campaign_members").update({ current_step: next.step_order, last_step_at: new Date().toISOString(), next_step_at: scheduledIn(next.delay_hours), updated_at: new Date().toISOString() }).eq("id", member.id);
+}
+
+async function chooseMailbox(db: DB, userId: string, timeZone: string) {
+  const { data: mailboxes } = await db.from("energy_mailboxes").select("*").eq("user_id", userId).eq("status", "ready").order("sent_today", { ascending: true });
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date());
+  for (const mailbox of mailboxes || []) {
+    const used = mailbox.sent_today_on === today ? Number(mailbox.sent_today || 0) : 0;
+    if (used < Number(mailbox.daily_limit || 30)) return { mailbox, today, used };
+  }
+  return null;
+}
+
+async function processMember(db: DB, campaign: any, member: any, steps: any[], baseOverride: string | null) {
+  const lead = member.energy_leads;
+  if (!lead || lead.do_not_contact || !lead.email) {
+    await db.from("energy_campaign_members").update({ status: "stopped", stopped_reason: lead?.do_not_contact ? "do_not_contact" : "missing_email", updated_at: new Date().toISOString() }).eq("id", member.id);
+    return { sent: 0, failed: 0, manual: 0, blocked: 0 };
+  }
+  const step = steps.find((row) => Number(row.step_order) === Number(member.current_step));
+  if (!step) { await db.from("energy_campaign_members").update({ status: "completed", updated_at: new Date().toISOString() }).eq("id", member.id); return { sent: 0, failed: 0, manual: 0, blocked: 0 }; }
+  if (step.step_type === "wait") { await advanceMember(db, member, steps); return { sent: 0, failed: 0, manual: 0, blocked: 0 }; }
+  if (step.step_type === "manual_call") {
+    await db.from("energy_followups").insert({ user_id: campaign.user_id, lead_id: lead.id, campaign_id: campaign.id, title: `${lead.company_name} anrufen`, due_at: new Date().toISOString(), priority: Number(lead.intent_score || 0) >= 70 ? "hot" : "high", reason: lead.next_action || "Kampagnen-Schritt" });
+    await db.from("energy_activities").insert({ user_id: campaign.user_id, lead_id: lead.id, campaign_id: campaign.id, activity_type: "call_task", title: "Call-Aufgabe erstellt" });
+    await advanceMember(db, member, steps); return { sent: 0, failed: 0, manual: 1, blocked: 0 };
+  }
+  const selection = await chooseMailbox(db, campaign.user_id, campaign.timezone || "Europe/Berlin");
+  if (!selection) return { sent: 0, failed: 0, manual: 0, blocked: 1 };
+  const { mailbox, today, used } = selection;
+  const password = await getSmtpPassword(db, mailbox, campaign.user_id);
+  if (!password || !mailbox.smtp_host || !mailbox.smtp_username) { await db.from("energy_mailboxes").update({ status: "error", last_error: "SMTP-Konfiguration unvollständig", updated_at: new Date().toISOString() }).eq("id", mailbox.id); return { sent: 0, failed: 1, manual: 0, blocked: 0 }; }
+  const baseUrl = String(campaign.tracking_base_url || baseOverride || "").replace(/\/$/, "");
+  if (!/^https:\/\//i.test(baseUrl)) return { sent: 0, failed: 1, manual: 0, blocked: 0 };
+  const needsVideo = Boolean(campaign.include_video || step.include_video || step.step_type === "video_email");
+  const videoUrl = needsVideo ? await ensureVideo(db, lead, campaign.user_id, baseUrl) : "";
+  const subject = personalize(step.subject_template || campaign.subject_template || "Kurze Frage zu {{company}}", lead, videoUrl);
+  const text = personalize(step.body_template || campaign.body_template || "Guten Tag {{firstname}},\n\nich habe mir {{company}} angesehen. {{reason}}\n\n{{video_url}}", lead, videoUrl);
+  const { data: prior } = await db.from("energy_messages").select("*").eq("campaign_member_id", member.id).eq("step_order", step.step_order).eq("direction", "outbound").maybeSingle();
+  if (prior && ["sent", "delivered", "opened", "clicked", "replied"].includes(prior.status)) { await advanceMember(db, member, steps); return { sent: 0, failed: 0, manual: 0, blocked: 0 }; }
+  let message = prior;
+  if (!message) {
+    const inserted = await db.from("energy_messages").insert({ user_id: campaign.user_id, lead_id: lead.id, campaign_id: campaign.id, campaign_member_id: member.id, mailbox_id: mailbox.id, step_order: step.step_order, direction: "outbound", status: "queued", to_email: lead.email, from_email: mailbox.email_address, subject, body_text: text, scheduled_at: new Date().toISOString(), metadata: { video_url: videoUrl } }).select("*").single();
+    if (inserted.error || !inserted.data) return { sent: 0, failed: 1, manual: 0, blocked: 0 };
+    message = inserted.data;
+  }
+  const html = toHtml(text, baseUrl, message.tracking_token);
+  await db.from("energy_messages").update({ status: "sending", subject, body_text: text, body_html: html, mailbox_id: mailbox.id, updated_at: new Date().toISOString() }).eq("id", message.id);
+  try {
+    const transport = nodemailer.createTransport({ host: mailbox.smtp_host, port: Number(mailbox.smtp_port) || 587, secure: Boolean(mailbox.smtp_secure), auth: { user: mailbox.smtp_username, pass: password }, connectionTimeout: 12000, greetingTimeout: 12000, socketTimeout: 20000 });
+    const info = await transport.sendMail({ from: mailbox.from_name ? `"${String(mailbox.from_name).replace(/\"/g, "")}" <${mailbox.email_address}>` : mailbox.email_address, to: lead.email, replyTo: mailbox.reply_to || mailbox.email_address, subject, text, html, headers: { "X-Walkenhorst-Lead": lead.id, "X-Walkenhorst-Message": message.id } });
+    const now = new Date().toISOString();
+    await db.from("energy_messages").update({ status: "sent", provider_message_id: info.messageId || null, sent_at: now, error: null, updated_at: now }).eq("id", message.id);
+    await db.from("energy_mailboxes").update({ sent_today: used + 1, sent_today_on: today, last_error: null, updated_at: now }).eq("id", mailbox.id);
+    await db.from("energy_leads").update({ status: ["new", "research", "ready"].includes(lead.status) ? "contacted" : lead.status, last_contact_at: now, updated_at: now }).eq("id", lead.id);
+    await db.from("energy_activities").insert({ user_id: campaign.user_id, lead_id: lead.id, campaign_id: campaign.id, activity_type: "email_sent", title: `E-Mail Schritt ${step.step_order} versendet`, detail: subject, metadata: { message_id: message.id, mailbox: mailbox.email_address } });
+    await advanceMember(db, member, steps); return { sent: 1, failed: 0, manual: 0, blocked: 0 };
+  } catch (error) {
+    const messageText = error instanceof Error ? error.message.slice(0, 500) : "SMTP-Versand fehlgeschlagen";
+    await db.from("energy_messages").update({ status: "failed", error: messageText, updated_at: new Date().toISOString() }).eq("id", message.id);
+    await db.from("energy_mailboxes").update({ last_error: messageText, updated_at: new Date().toISOString() }).eq("id", mailbox.id);
+    return { sent: 0, failed: 1, manual: 0, blocked: 0 };
+  }
+}
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: RESPONSE_HEADERS });
+  if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
+  const db = adminClient();
+  try {
+    const auth = await authorize(req, db); if (!auth.ok) return json({ error: "Nicht autorisiert" }, 401);
+    const body = await req.json().catch(() => ({})); const limit = Math.max(1, Math.min(25, Number(body?.limit) || 10)); const baseOverride = typeof body?.baseUrl === "string" ? body.baseUrl : null;
+    let query = db.from("energy_campaigns").select("*").eq("status", "active"); if (auth.userId) query = query.eq("user_id", auth.userId);
+    const { data: campaigns, error } = await query; if (error) throw error;
+    const totals = { processed: 0, sent: 0, failed: 0, manual: 0, blocked: 0 };
+    for (const campaign of campaigns || []) {
+      if (totals.processed >= limit) break; if (!isInsideWindow(campaign)) continue;
+      const since = new Date(Date.now() - 24 * 3_600_000).toISOString();
+      const { count } = await db.from("energy_messages").select("id", { count: "exact", head: true }).eq("campaign_id", campaign.id).eq("direction", "outbound").in("status", ["sent", "delivered", "opened", "clicked", "replied"]).gte("sent_at", since);
+      if ((count || 0) >= Number(campaign.daily_limit || 30)) continue;
+      const { data: steps } = await db.from("energy_campaign_steps").select("*").eq("campaign_id", campaign.id).eq("active", true).order("step_order"); if (!steps?.length) continue;
+      const dueNow = new Date().toISOString();
+      const { data: members, error: memberError } = await db.from("energy_campaign_members").select("*,energy_leads(*)").eq("campaign_id", campaign.id).eq("status", "queued").or(`next_step_at.is.null,next_step_at.lte.${dueNow}`).limit(limit - totals.processed);
+      if (memberError) throw memberError;
+      for (const member of members || []) {
+        if (totals.processed >= limit) break; totals.processed += 1;
+        const result = await processMember(db, campaign, member, steps, baseOverride);
+        totals.sent += result.sent; totals.failed += result.failed; totals.manual += result.manual; totals.blocked += result.blocked;
+        if (result.blocked) break;
+      }
+    }
+    return json({ ok: true, ...totals });
+  } catch (error) { return json({ error: error instanceof Error ? error.message.slice(0, 700) : "Worker error" }, 500); }
+});
