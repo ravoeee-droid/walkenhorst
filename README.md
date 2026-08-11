@@ -1,50 +1,70 @@
-# Walkenhorst Energy Sales Radar
+# Walkenhorst Energy Sales OS
 
-Eigenständiges Revenue-Intelligence- und Outbound-System für Walkenhorst. Dieses Repository ist bewusst vollständig von Pflege-, Julian-Arndt- und anderen Kundenprojekten getrennt.
+Eigenständiges Lead-Finder-, Outbound-, Fake-Loom- und Sales-CRM-System für Walkenhorst. Das Repository und die Supabase-Datenbank sind vollständig von Pflege-, Julian-Arndt- und anderen Kundenprojekten getrennt.
+
+## Produktflow
+
+Lead Finder → Import/Enrichment → Energy Opportunity Score → CRM → Kampagne → personalisierte E-Mail → automatische Fake-Loom-Seite → Open/Click/Video-Intent → Reply/Follow-up → Termin/Deal.
 
 ## Enthalten
 
-- Energy Lead Radar mit PV-/Energie-/Intent-/Contactability-Scoring
-- CRM Status und Next Best Action
-- personalisierte Fake-Loom-Landingpages `/v/<slug>`
-- View-, Play-, Watch-%- und CTA-Tracking
-- Mailbox-Konfiguration mit sicheren Tageslimits
-- Kampagnen-Templates
-- Website Intelligence Schnell-Audit mit SSRF-Schutz
-- kostenloser SEO Keyword Radar ohne erfundene Suchvolumenwerte
-- Supabase RLS-Schema für getrennte Datenhaltung
+- Lead Finder für gewerbliche Zielgruppen mit Standort/Radius, OpenStreetMap-Daten und Website-Enrichment
+- CSV-Import und Dubletten-Schutz
+- Energy Opportunity Scoring: PV, Energieeffizienz, Intent und Kontaktierbarkeit
+- Sales CRM als Tabelle und Kanban-Pipeline
+- Lead-Detail mit Sales Angle, Status und Unified Timeline
+- Fake-Loom-Studio mit personalisierten `/v/<slug>` Landingpages
+- gesäuberte Live-Vorschau der echten Prospect-Website im Fake-Loom-Player
+- optionales Talking-Head-Video mit Audio nach Play-Klick
+- View-, Play-, 25/50/75/90/100-%- und CTA-Tracking
+- automatische Hot-Lead-Follow-ups bei starkem Video-Intent
+- SMTP-Mailboxen mit Tageslimits; Passwörter liegen verschlüsselt im Supabase Vault
+- IMAP-Antwort-Sync und automatische Reply-Erkennung
+- Kampagnen mit Sequenzschritten: E-Mail, Video-E-Mail, Wait und Call-Aufgabe
+- automatische personalisierte Variablen `{{firstname}}`, `{{company}}`, `{{city}}`, `{{industry}}`, `{{opportunity}}`, `{{reason}}`, `{{video_url}}`
+- Versandfenster, Kampagnen- und Mailboxlimits sowie idempotente Versandlogik gegen Doppelversand
+- E-Mail Open-/Click-Tracking und bestätigter Unsubscribe-Flow
+- Inbox, Follow-ups und Vorlagen
+- Website Intelligence Audit mit PDF-/Druckexport
+- SEO Keyword Radar ohne erfundene Suchvolumenwerte
+- Supabase RLS, SSRF-Schutz, sichere Tracking-Redirects und Edge-Function-Backend
+- automatischer Campaign Worker über `pg_cron` + `pg_net`
 
-## Start
+## Deployment
 
 ```bash
 npm install
 npm run typecheck
 npm run build
-npm run dev
 ```
 
-## Supabase
+Supabase-Migrationen liegen unter `supabase/migrations/`, Edge Functions unter `supabase/functions/`.
 
-1. Eigenes Supabase-Projekt nur für Walkenhorst erstellen.
-2. `supabase/schema.sql` im SQL Editor ausführen.
-3. In Vercel hinterlegen:
-   - `NEXT_PUBLIC_SUPABASE_URL`
-   - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
-   - optional `NEXT_PUBLIC_WALKENHORST_CALENDAR_URL`
-4. Neu deployen.
-5. Auf der Startseite den ersten Account erstellen und anmelden.
+Benötigte öffentliche Frontend-Konfiguration:
 
-## Fake Loom Flow
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+- optional `NEXT_PUBLIC_WALKENHORST_CALENDAR_URL`
 
-Lead → Opportunity Score → Video-Seite erzeugen → `/v/<slug>` versenden → View/Watch/CTA wird in `energy_video_events` gespeichert → Dashboard zeigt Intent.
+## Mailbox-Setup
 
-Für echtes Presenter-Video kann pro Video-Seite später eine MP4/WebM-URL hinterlegt werden. Ohne Presenter-Video zeigt die V1 einen gebrandeten Talking-Head-Platzhalter.
+In **Integrationen** SMTP- und optional IMAP-Daten des Postfachs eintragen und speichern. Das Passwort wird nicht in der normalen Mailbox-Tabelle gespeichert. Danach **Test** ausführen. Nur Mailboxen mit Status `ready` werden vom Campaign Worker für Versand verwendet.
 
-## Nächste Integrationen
+## Kampagnen-Sicherheit
 
-- Google Ads Keyword Planning für echtes Suchvolumen/CPC
-- Google PageSpeed/CrUX für Core Web Vitals
-- Mailprovider/OAuth für echten Versand und Reply Detection
-- Telephony/Call Tracking
-- Maps/Unternehmensdaten/Entscheider-Anreicherung
-- optional Screenshot-Service für echte Website-Aufnahmen im Video
+- Ohne aktive Kampagne wird nichts versendet.
+- Ohne getestete `ready` Mailbox wird nichts versendet.
+- Tageslimits gelten pro Mailbox und Kampagne.
+- `do_not_contact` / Unsubscribe stoppt weitere Ansprache.
+- Erkannte Antworten stoppen die Sequenz und erzeugen einen Hot-Follow-up.
+- `(campaign_member_id, step_order)` ist für Outbound-Nachrichten eindeutig, damit Worker-Retries keinen Doppelversand erzeugen.
+
+## Freie Datenquellen
+
+Die V1 nutzt öffentliche OpenStreetMap-/Nominatim-/Overpass-Daten mit konservativen Limits und unterstützt eigene Endpoints über `NOMINATIM_BASE_URL` bzw. `OVERPASS_BASE_URL`. Für größere Volumina sollte später eine eigene/gehostete Datenquelle oder ein kommerzieller Provider angeschlossen werden.
+
+## Noch externe Voraussetzungen
+
+- Ein echter SMTP/IMAP-Account muss einmal in **Integrationen** hinterlegt und getestet werden; Zugangsdaten können nicht sinnvoll im Repository vorgegeben werden.
+- Exakte Google-Ads-Suchvolumina benötigen später eine Google-Ads-API-Anbindung. Die kostenlose SEO-V1 erfindet bewusst keine Volumenwerte.
+- Ein echtes Cold-E-Mail-Warm-up-Netzwerk ist kein Bestandteil der V1; Deliverability wird über konservative Limits, saubere Mailboxen und Stop-/Bounce-/Reply-Logik abgesichert.
