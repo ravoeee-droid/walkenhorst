@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import "./outbound-ui.css";
 import "./sales-os.css";
+import "./audit-print.css";
 
 export const metadata: Metadata = {
   title: "Walkenhorst Energy Sales OS",
