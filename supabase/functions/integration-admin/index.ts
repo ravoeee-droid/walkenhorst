@@ -3,7 +3,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 
 const H={"content-type":"application/json","cache-control":"no-store","access-control-allow-origin":"*","access-control-allow-headers":"authorization, content-type"};
 const out=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:H});
-const PROVIDERS=new Set(["google_maps","firecrawl","reacher","chatwoot","activepieces","papermark","dub","openreplay","typebot","twenty","warmbly","denshees"]);
+const PROVIDERS=new Set(["google_maps","firecrawl","reacher","chatwoot","activepieces","papermark","dub","openreplay","typebot","twenty","warmbly","denshees","rinkel"]);
 
 function env(){
  const url=Deno.env.get("SUPABASE_URL")||"";
@@ -52,8 +52,12 @@ Deno.serve(async(req)=>{
    let res:Response;
    if(provider==="google_maps")res=await fetchTimeout(`${base}/api/v1/health`,{headers:headersFor(secret,i.config)});
    else if(provider==="chatwoot")res=await fetchTimeout(`${base}/api/v1/profile`,{headers:{...headersFor(secret,{auth_header:"api_access_token",auth_scheme:""}),"content-type":"application/json"}});
+   else if(provider==="rinkel"){
+    if(!secret)return out({error:"Rinkel API-Key fehlt"},400);
+    res=await fetchTimeout(`${base}/users`,{headers:{"x-rinkel-api-key":secret,"accept":"application/json","user-agent":"Walkenhorst-Energy-Radar/1.0"}});
+   }
    else res=await fetchTimeout(base,{method:"GET",headers:headersFor(secret,i.config)});
-   const ok=res.ok||(provider!=="google_maps"&&res.status<500);
+   const ok=res.ok||(provider!=="google_maps"&&provider!=="rinkel"&&res.status<500);
    await db.from("energy_integrations").update({status:ok?"ready":"error",last_tested_at:new Date().toISOString(),last_error:ok?null:`HTTP ${res.status}`,updated_at:new Date().toISOString()}).eq("id",i.id).eq("user_id",u.id);
    return out({ok,status:res.status,message:ok?"Verbindung erreichbar":`Verbindung fehlgeschlagen (${res.status})`},ok?200:422);
   }
