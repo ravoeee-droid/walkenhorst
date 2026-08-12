@@ -2,7 +2,7 @@ name: Walkenhorst CI
 
 on:
   push:
-    branches: [main, feature/production-outbound-v1]
+    branches: [main, feature/production-outbound-v1, feature/studio-v2]
 
 permissions:
   contents: read
