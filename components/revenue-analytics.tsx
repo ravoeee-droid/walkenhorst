@@ -56,7 +56,7 @@ export function RevenueAnalytics({user}:{user:User}){
     [answeredCalls.length,"Beantwortet",`${answerRate}% Answer Rate`],
     [positiveCalls.length,"Positive Calls","AI Sentiment"],
     [`${avgCallMinutes} Min.`,"Ø Gespräch","beantwortete Calls"],
-    [`${callToMeeting}%","Calls → Termin+",`${callLeadsMeetingPlus}/${callLeadIds.size} Call-Leads`],
+    [`${callToMeeting}%`,"Calls → Termin+",`${callLeadsMeetingPlus}/${callLeadIds.size} Call-Leads`],
   ];
 
   return <main className="os-root" style={{minHeight:"100vh"}}><div className="os-content" style={{maxWidth:1400,margin:"0 auto",paddingTop:28}}>
