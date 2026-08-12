@@ -1,71 +1,246 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
-const H={"content-type":"application/json","cache-control":"no-store","access-control-allow-origin":"*","access-control-allow-headers":"authorization, content-type"};
-const out=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:H});
-function env(){const url=Deno.env.get("SUPABASE_URL")||"";const pubs=Deno.env.get("SUPABASE_PUBLISHABLE_KEYS");const secs=Deno.env.get("SUPABASE_SECRET_KEYS");const publicKey=pubs?JSON.parse(pubs)?.default:Deno.env.get("SUPABASE_ANON_KEY");const secretKey=secs?JSON.parse(secs)?.default:Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");if(!url||!publicKey||!secretKey)throw new Error("Backend configuration missing");return{url,publicKey,secretKey}}
-function admin(){const e=env();return createClient(e.url,e.secretKey,{auth:{persistSession:false,autoRefreshToken:false}})}
-async function user(req:Request){const token=(req.headers.get("authorization")||"").replace(/^Bearer\s+/i,"").trim();if(!token)return null;const e=env();const c=createClient(e.url,e.publicKey,{auth:{persistSession:false,autoRefreshToken:false}});const {data,error}=await c.auth.getUser(token);return error?null:data.user}
-function clamp(n:unknown,min:number,max:number,fallback:number){const x=Number(n);return Number.isFinite(x)?Math.max(min,Math.min(max,Math.round(x))):fallback}
-function base(v:string){return String(v||"").replace(/\/$/,"")}
-function uniq(values:string[]){return [...new Set(values.map(v=>v.trim()).filter(Boolean))]}
-function authHeaders(secret:string,config:any){const h:Record<string,string>={"content-type":"application/json","user-agent":"Walkenhorst-Energy-Radar/1.0"};if(secret){const name=String(config?.auth_header||"Authorization");const scheme=String(config?.auth_scheme??"Bearer");h[name]=scheme?`${scheme} ${secret}`:secret}return h}
-async function timeoutFetch(url:string,init:RequestInit={},ms=30000){const c=new AbortController();const t=setTimeout(()=>c.abort(),ms);try{return await fetch(url,{...init,signal:c.signal})}finally{clearTimeout(t)}}
+const H = {
+  "content-type": "application/json",
+  "cache-control": "no-store",
+  "access-control-allow-origin": "*",
+  "access-control-allow-headers": "authorization, content-type",
+};
+const out = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: H });
 
-async function integration(db:any,userId:string,provider:string){const {data}=await db.from("energy_integrations").select("*").eq("user_id",userId).eq("provider",provider).neq("status","disabled").maybeSingle();if(!data)throw new Error(`${provider} ist unter Integrationen noch nicht verbunden.`);const {data:s}=await db.rpc("energy_get_integration_secret",{p_integration_id:data.id,p_user_id:userId});return{row:data,secret:String(s||"")}}
-function normalizeWebsite(v:any){const s=String(v||"").trim();if(!s)return null;return /^https?:\/\//i.test(s)?s:`https://${s}`}
-function googlePlace(row:any,jobId:string,index:number){
- const emails=Array.isArray(row?.emails)?row.emails:[];const email=String(row?.email||emails[0]||"").trim()||null;
- const address=String(row?.address||row?.complete_address||"").trim()||null;
- const city=String(row?.city||row?.borough||row?.state||"").trim()||null;
- const id=String(row?.place_id||row?.cid||row?.data_id||`${jobId}-${index}`);
- return{company_name:String(row?.title||row?.name||"").trim(),website:normalizeWebsite(row?.website),city,industry:String(row?.category||row?.type||"").trim()||null,address,postcode:String(row?.postal_code||row?.postcode||"").trim()||null,phone:String(row?.phone||"").trim()||null,email,source:"google_maps",source_external_id:id,source_url:String(row?.link||row?.url||"").trim()||null,rating:Number(row?.review_rating||row?.rating)||null,reviews:Number(row?.reviews||row?.review_count)||null,lat:Number(row?.latitude??row?.lat)||null,lon:Number(row?.longitude??row?.lng??row?.lon)||null};
+function env() {
+  const url = Deno.env.get("SUPABASE_URL") || "";
+  const pubs = Deno.env.get("SUPABASE_PUBLISHABLE_KEYS");
+  const secs = Deno.env.get("SUPABASE_SECRET_KEYS");
+  const publicKey = pubs ? JSON.parse(pubs)?.default : Deno.env.get("SUPABASE_ANON_KEY");
+  const secretKey = secs ? JSON.parse(secs)?.default : Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!url || !publicKey || !secretKey) throw new Error("Backend configuration missing");
+  return { url, publicKey, secretKey };
 }
-function parseResearch(markdown:string,links:any[]){
- const emailMatches=markdown.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi)||[];
- const phoneMatches=markdown.match(/(?:\+49|0)[\d\s()\/-]{7,}/g)||[];
- const lines=markdown.split(/\r?\n/).map(x=>x.replace(/^#+\s*/,"").trim()).filter(Boolean);
- const decisionLine=lines.find(x=>/(geschäftsführ|geschäftsleitung|managing director|ceo|inhaber)/i.test(x))||"";
- const decision=decisionLine.replace(/.*?(geschäftsführer(?:in)?|geschäftsführung|geschäftsleitung|managing director|ceo|inhaber(?:in)?)\s*[:\-–]?\s*/i,"").split(/[|·•,;]/)[0].trim().slice(0,120);
- const services=uniq(lines.filter(x=>x.length>8&&x.length<100&&/(leistung|service|lösungen|angebot|produktion|logistik|beratung|technik|energie|solar|pv|photovoltaik|wartung|industrie)/i.test(x)).slice(0,12));
- const signals=uniq([/photovoltaik|\bsolar\b|\bpv\b/i.test(markdown)?"PV/Solar auf Website erwähnt":"",/energie|strom|wärme|effizienz/i.test(markdown)?"Energie-Themen erwähnt":"",/nachhaltig|co2|klima/i.test(markdown)?"Nachhaltigkeit/CO₂ erwähnt":"",/karriere|stellenangebot|jobs|mitarbeiter/i.test(markdown)?"Recruiting-/Wachstumssignal":"",/standorte|niederlassung|filial/i.test(markdown)?"Mehrere Standorte möglich":""]);
- return{emails:uniq(emailMatches).slice(0,15),phones:uniq(phoneMatches).slice(0,10),decision_maker:decision||null,services,signals,links:(Array.isArray(links)?links:[]).slice(0,50),summary:markdown.replace(/\s+/g," ").trim().slice(0,1400)};
+
+function admin() {
+  const e = env();
+  return createClient(e.url, e.secretKey, { auth: { persistSession: false, autoRefreshToken: false } });
 }
-function preferredEmail(values:string[]){return [...values].sort((a,b)=>{const bad=(v:string)=>/^(info|kontakt|hello|office|mail|service|support|team)@/i.test(v)?1:0;return bad(a)-bad(b)})[0]||null}
 
-Deno.serve(async(req)=>{
- if(req.method==="OPTIONS")return new Response(null,{status:204,headers:H});if(req.method!=="POST")return out({error:"Method not allowed"},405);
- try{
-  const u=await user(req);if(!u)return out({error:"Nicht autorisiert"},401);const db=admin();const b=await req.json().catch(()=>({}));const action=String(b?.action||"");
+async function user(req: Request) {
+  const token = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "").trim();
+  if (!token) return null;
+  const e = env();
+  const c = createClient(e.url, e.publicKey, { auth: { persistSession: false, autoRefreshToken: false } });
+  const { data, error } = await c.auth.getUser(token);
+  return error ? null : data.user;
+}
 
-  if(action==="google_maps_start"){
-   const i=await integration(db,u.id,"google_maps");const keyword=[String(b?.query||"").trim(),String(b?.industry||"").trim(),String(b?.location||"").trim()].filter(Boolean).join(" ");if(!keyword)return out({error:"Suchbegriff fehlt"},400);
-   const radius=clamp(b?.radiusKm,1,100,20);const res=await timeoutFetch(`${base(i.row.base_url)}/api/v1/scrape`,{method:"POST",headers:authHeaders(i.secret,i.row.config),body:JSON.stringify({keyword,lang:"de",max_depth:clamp(b?.depth,1,10,2),radius,email:true,extra_reviews:false,fast_mode:Boolean(b?.fastMode),timeout:300})},20000);
-   const payload=await res.json().catch(()=>({}));if(!res.ok)throw new Error(payload?.message||`Google Maps Scraper HTTP ${res.status}`);const jobId=String(payload?.job_id||"");if(!jobId)throw new Error("Google Maps Scraper lieferte keine Job-ID");
-   const {data:search,error}=await db.from("energy_lead_searches").insert({user_id:u.id,query:keyword,location:String(b?.location||"")||null,radius_km:radius,result_count:0,imported_count:0,filters:{industry:String(b?.industry||""),limit:clamp(b?.limit,5,2000,200)},provider:"google_maps",external_job_id:jobId,status:"running"}).select("*").single();if(error)throw error;
-   return out({ok:true,search_id:search.id,job_id:jobId,status:payload?.status||"pending"},202);
+function clamp(n: unknown, min: number, max: number, fallback: number) {
+  const x = Number(n);
+  return Number.isFinite(x) ? Math.max(min, Math.min(max, Math.round(x))) : fallback;
+}
+function base(v: string) { return String(v || "").replace(/\/$/, ""); }
+function uniq(values: string[]) { return [...new Set(values.map((v) => v.trim()).filter(Boolean))]; }
+function authHeaders(secret: string, config: any) {
+  const h: Record<string, string> = { "content-type": "application/json", "user-agent": "Walkenhorst-Energy-Radar/1.0" };
+  if (secret) {
+    const name = String(config?.auth_header || "Authorization");
+    const scheme = String(config?.auth_scheme ?? "Bearer");
+    h[name] = scheme ? `${scheme} ${secret}` : secret;
   }
+  return h;
+}
+async function timeoutFetch(url: string, init: RequestInit = {}, ms = 30000) {
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(), ms);
+  try { return await fetch(url, { ...init, signal: c.signal }); }
+  finally { clearTimeout(t); }
+}
 
-  if(action==="google_maps_poll"){
-   const searchId=String(b?.searchId||"");const {data:s}=await db.from("energy_lead_searches").select("*").eq("id",searchId).eq("user_id",u.id).eq("provider","google_maps").maybeSingle();if(!s)return out({error:"Suchjob nicht gefunden"},404);const i=await integration(db,u.id,"google_maps");
-   const res=await timeoutFetch(`${base(i.row.base_url)}/api/v1/jobs/${encodeURIComponent(s.external_job_id)}`,{headers:authHeaders(i.secret,i.row.config)},20000);const p=await res.json().catch(()=>({}));if(!res.ok)throw new Error(p?.message||`Google Maps Job HTTP ${res.status}`);
-   const rawStatus=String(p?.status||"").toLowerCase();if(["failed","cancelled","discarded"].includes(rawStatus)){await db.from("energy_lead_searches").update({status:"failed",error:String(p?.error||rawStatus),completed_at:new Date().toISOString()}).eq("id",s.id);return out({ok:false,status:"failed",error:p?.error||rawStatus},422)}
-   if(!["completed","complete","succeeded","success"].includes(rawStatus))return out({ok:true,status:rawStatus||"running",search_id:s.id,job_id:s.external_job_id});
-   const limit=clamp(s.filters?.limit,5,2000,200);const results=(Array.isArray(p?.results)?p.results:[]).map((x:any,n:number)=>googlePlace(x,s.external_job_id,n)).filter((x:any)=>x.company_name).slice(0,limit);
-   await db.from("energy_lead_searches").update({status:"completed",result_count:results.length,error:null,completed_at:new Date().toISOString()}).eq("id",s.id);return out({ok:true,status:"completed",results,count:results.length,search_id:s.id});
+async function integration(db: any, userId: string, provider: string) {
+  const { data } = await db.from("energy_integrations").select("*").eq("user_id", userId).eq("provider", provider).neq("status", "disabled").maybeSingle();
+  if (!data) throw new Error(`${provider} ist unter Integrationen noch nicht verbunden.`);
+  const { data: s } = await db.rpc("energy_get_integration_secret", { p_integration_id: data.id, p_user_id: userId });
+  return { row: data, secret: String(s || "") };
+}
+
+function normalizeWebsite(v: any) {
+  const s = String(v || "").trim();
+  if (!s) return null;
+  return /^https?:\/\//i.test(s) ? s : `https://${s}`;
+}
+
+function googlePlace(row: any, jobId: string, index: number) {
+  const emails = Array.isArray(row?.emails) ? row.emails : [];
+  const email = String(row?.email || emails[0] || "").trim() || null;
+  const address = String(row?.address || row?.complete_address || "").trim() || null;
+  const city = String(row?.city || row?.borough || row?.state || "").trim() || null;
+  const id = String(row?.place_id || row?.cid || row?.data_id || `${jobId}-${index}`);
+  return {
+    company_name: String(row?.title || row?.name || "").trim(),
+    website: normalizeWebsite(row?.website),
+    city,
+    industry: String(row?.category || row?.type || "").trim() || null,
+    address,
+    postcode: String(row?.postal_code || row?.postcode || "").trim() || null,
+    phone: String(row?.phone || "").trim() || null,
+    email,
+    source: "google_maps",
+    source_external_id: id,
+    source_url: String(row?.link || row?.url || "").trim() || null,
+    rating: Number(row?.review_rating || row?.rating) || null,
+    reviews: Number(row?.reviews || row?.review_count) || null,
+    lat: Number(row?.latitude ?? row?.lat) || null,
+    lon: Number(row?.longitude ?? row?.lng ?? row?.lon) || null,
+  };
+}
+
+function parseResearch(markdown: string, links: any[]) {
+  const emailMatches = markdown.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
+  const phoneMatches = markdown.match(/(?:\+49|0)[\d\s()\/-]{7,}/g) || [];
+  const lines = markdown.split(/\r?\n/).map((x) => x.replace(/^#+\s*/, "").trim()).filter(Boolean);
+  const decisionLine = lines.find((x) => /(geschäftsführ|geschäftsleitung|managing director|ceo|inhaber)/i.test(x)) || "";
+  const decision = decisionLine
+    .replace(/.*?(geschäftsführer(?:in)?|geschäftsführung|geschäftsleitung|managing director|ceo|inhaber(?:in)?)\s*[:\-–]?\s*/i, "")
+    .split(/[|·•,;]/)[0].trim().slice(0, 120);
+  const services = uniq(lines.filter((x) => x.length > 8 && x.length < 100 && /(leistung|service|lösungen|angebot|produktion|logistik|beratung|technik|energie|solar|pv|photovoltaik|wartung|industrie)/i.test(x)).slice(0, 12));
+  const signals = uniq([
+    /photovoltaik|\bsolar\b|\bpv\b/i.test(markdown) ? "PV/Solar auf Website erwähnt" : "",
+    /energie|strom|wärme|effizienz/i.test(markdown) ? "Energie-Themen erwähnt" : "",
+    /nachhaltig|co2|klima/i.test(markdown) ? "Nachhaltigkeit/CO₂ erwähnt" : "",
+    /karriere|stellenangebot|jobs|mitarbeiter/i.test(markdown) ? "Recruiting-/Wachstumssignal" : "",
+    /standorte|niederlassung|filial/i.test(markdown) ? "Mehrere Standorte möglich" : "",
+  ]);
+  return {
+    emails: uniq(emailMatches).slice(0, 15),
+    phones: uniq(phoneMatches).slice(0, 10),
+    decision_maker: decision || null,
+    services,
+    signals,
+    links: (Array.isArray(links) ? links : []).slice(0, 50),
+    summary: markdown.replace(/\s+/g, " ").trim().slice(0, 1400),
+  };
+}
+
+function preferredEmail(values: string[]) {
+  return [...values].sort((a, b) => {
+    const bad = (v: string) => /^(info|kontakt|hello|office|mail|service|support|team)@/i.test(v) ? 1 : 0;
+    return bad(a) - bad(b);
+  })[0] || null;
+}
+
+async function checkReacher(baseUrl: string, headers: Record<string, string>, email: string) {
+  const request = { method: "POST", headers, body: JSON.stringify({ to_email: email }) } as RequestInit;
+  let res = await timeoutFetch(`${baseUrl}/v1/check_email`, request, 30000);
+  let endpoint = "v1";
+  if ([404, 405].includes(res.status)) {
+    res = await timeoutFetch(`${baseUrl}/v0/check_email`, request, 30000);
+    endpoint = "v0";
   }
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload?.message || payload?.error || `Reacher HTTP ${res.status}`);
+  return { payload, endpoint };
+}
 
-  if(action==="enrich_lead"){
-   const leadId=String(b?.leadId||"");const {data:lead}=await db.from("energy_leads").select("*").eq("id",leadId).eq("user_id",u.id).maybeSingle();if(!lead)return out({error:"Lead nicht gefunden"},404);if(!lead.website)return out({error:"Lead hat keine Website"},400);const i=await integration(db,u.id,"firecrawl");const headers=authHeaders(i.secret,i.row.config);const requestBody={url:lead.website,formats:["markdown","links"],onlyMainContent:false,timeout:20000};
-   let res=await timeoutFetch(`${base(i.row.base_url)}/v2/scrape`,{method:"POST",headers,body:JSON.stringify(requestBody)},35000);if([404,405].includes(res.status))res=await timeoutFetch(`${base(i.row.base_url)}/v1/scrape`,{method:"POST",headers,body:JSON.stringify(requestBody)},35000);const p=await res.json().catch(()=>({}));if(!res.ok)throw new Error(p?.error||p?.message||`Firecrawl HTTP ${res.status}`);const d=p?.data||p;const markdown=String(d?.markdown||d?.data?.markdown||"");if(!markdown)throw new Error("Firecrawl lieferte keinen auswertbaren Website-Text");const research=parseResearch(markdown,d?.links||d?.data?.links||[]);const newEmail=lead.email||preferredEmail(research.emails);const newContact=lead.contact_name||research.decision_maker;const context={...(lead.research_context||{}),firecrawl:{...research,title:d?.metadata?.title||null,description:d?.metadata?.description||null,scraped_at:new Date().toISOString()}};
-   const update:any={research_context:context,enriched_at:new Date().toISOString(),updated_at:new Date().toISOString()};if(newEmail&&!lead.email){update.email=newEmail;update.email_status="unknown"}if(newContact&&!lead.contact_name)update.contact_name=newContact;
-   const {error}=await db.from("energy_leads").update(update).eq("id",lead.id).eq("user_id",u.id);if(error)throw error;await db.from("energy_activities").insert({user_id:u.id,lead_id:lead.id,activity_type:"website_enriched",title:"Website mit Firecrawl angereichert",detail:`${research.emails.length} E-Mail(s), ${research.signals.length} Signal(e)`});return out({ok:true,research,lead_updates:{email:newEmail,contact_name:newContact}});
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: H });
+  if (req.method !== "POST") return out({ error: "Method not allowed" }, 405);
+
+  try {
+    const u = await user(req);
+    if (!u) return out({ error: "Nicht autorisiert" }, 401);
+    const db = admin();
+    const b = await req.json().catch(() => ({}));
+    const action = String(b?.action || "");
+
+    if (action === "google_maps_start") {
+      const i = await integration(db, u.id, "google_maps");
+      const keyword = [String(b?.query || "").trim(), String(b?.industry || "").trim(), String(b?.location || "").trim()].filter(Boolean).join(" ");
+      if (!keyword) return out({ error: "Suchbegriff fehlt" }, 400);
+      const radius = clamp(b?.radiusKm, 1, 100, 20);
+      const res = await timeoutFetch(`${base(i.row.base_url)}/api/v1/scrape`, {
+        method: "POST",
+        headers: authHeaders(i.secret, i.row.config),
+        body: JSON.stringify({ keyword, lang: "de", max_depth: clamp(b?.depth, 1, 10, 2), radius, email: true, extra_reviews: false, fast_mode: Boolean(b?.fastMode), timeout: 300 }),
+      }, 20000);
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload?.message || `Google Maps Scraper HTTP ${res.status}`);
+      const jobId = String(payload?.job_id || "");
+      if (!jobId) throw new Error("Google Maps Scraper lieferte keine Job-ID");
+      const { data: search, error } = await db.from("energy_lead_searches").insert({
+        user_id: u.id, query: keyword, location: String(b?.location || "") || null, radius_km: radius,
+        result_count: 0, imported_count: 0, filters: { industry: String(b?.industry || ""), limit: clamp(b?.limit, 5, 2000, 200) },
+        provider: "google_maps", external_job_id: jobId, status: "running",
+      }).select("*").single();
+      if (error) throw error;
+      return out({ ok: true, search_id: search.id, job_id: jobId, status: payload?.status || "pending" }, 202);
+    }
+
+    if (action === "google_maps_poll") {
+      const searchId = String(b?.searchId || "");
+      const { data: s } = await db.from("energy_lead_searches").select("*").eq("id", searchId).eq("user_id", u.id).eq("provider", "google_maps").maybeSingle();
+      if (!s) return out({ error: "Suchjob nicht gefunden" }, 404);
+      const i = await integration(db, u.id, "google_maps");
+      const res = await timeoutFetch(`${base(i.row.base_url)}/api/v1/jobs/${encodeURIComponent(s.external_job_id)}`, { headers: authHeaders(i.secret, i.row.config) }, 20000);
+      const p = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(p?.message || `Google Maps Job HTTP ${res.status}`);
+      const rawStatus = String(p?.status || "").toLowerCase();
+      if (["failed", "cancelled", "discarded"].includes(rawStatus)) {
+        await db.from("energy_lead_searches").update({ status: "failed", error: String(p?.error || rawStatus), completed_at: new Date().toISOString() }).eq("id", s.id);
+        return out({ ok: false, status: "failed", error: p?.error || rawStatus }, 422);
+      }
+      if (!["completed", "complete", "succeeded", "success"].includes(rawStatus)) return out({ ok: true, status: rawStatus || "running", search_id: s.id, job_id: s.external_job_id });
+      const limit = clamp(s.filters?.limit, 5, 2000, 200);
+      const results = (Array.isArray(p?.results) ? p.results : []).map((x: any, n: number) => googlePlace(x, s.external_job_id, n)).filter((x: any) => x.company_name).slice(0, limit);
+      await db.from("energy_lead_searches").update({ status: "completed", result_count: results.length, error: null, completed_at: new Date().toISOString() }).eq("id", s.id);
+      return out({ ok: true, status: "completed", results, count: results.length, search_id: s.id });
+    }
+
+    if (action === "enrich_lead") {
+      const leadId = String(b?.leadId || "");
+      const { data: lead } = await db.from("energy_leads").select("*").eq("id", leadId).eq("user_id", u.id).maybeSingle();
+      if (!lead) return out({ error: "Lead nicht gefunden" }, 404);
+      if (!lead.website) return out({ error: "Lead hat keine Website" }, 400);
+      const i = await integration(db, u.id, "firecrawl");
+      const headers = authHeaders(i.secret, i.row.config);
+      const requestBody = { url: lead.website, formats: ["markdown", "links"], onlyMainContent: false, timeout: 20000 };
+      let res = await timeoutFetch(`${base(i.row.base_url)}/v2/scrape`, { method: "POST", headers, body: JSON.stringify(requestBody) }, 35000);
+      if ([404, 405].includes(res.status)) res = await timeoutFetch(`${base(i.row.base_url)}/v1/scrape`, { method: "POST", headers, body: JSON.stringify(requestBody) }, 35000);
+      const p = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(p?.error || p?.message || `Firecrawl HTTP ${res.status}`);
+      const d = p?.data || p;
+      const markdown = String(d?.markdown || d?.data?.markdown || "");
+      if (!markdown) throw new Error("Firecrawl lieferte keinen auswertbaren Website-Text");
+      const research = parseResearch(markdown, d?.links || d?.data?.links || []);
+      const newEmail = lead.email || preferredEmail(research.emails);
+      const newContact = lead.contact_name || research.decision_maker;
+      const context = { ...(lead.research_context || {}), firecrawl: { ...research, title: d?.metadata?.title || null, description: d?.metadata?.description || null, scraped_at: new Date().toISOString() } };
+      const update: any = { research_context: context, enriched_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      if (newEmail && !lead.email) { update.email = newEmail; update.email_status = "unknown"; }
+      if (newContact && !lead.contact_name) update.contact_name = newContact;
+      const { error } = await db.from("energy_leads").update(update).eq("id", lead.id).eq("user_id", u.id);
+      if (error) throw error;
+      await db.from("energy_activities").insert({ user_id: u.id, lead_id: lead.id, activity_type: "website_enriched", title: "Website mit Firecrawl angereichert", detail: `${research.emails.length} E-Mail(s), ${research.signals.length} Signal(e)` });
+      return out({ ok: true, research, lead_updates: { email: newEmail, contact_name: newContact } });
+    }
+
+    if (action === "verify_email") {
+      const leadId = String(b?.leadId || "");
+      const { data: lead } = await db.from("energy_leads").select("*").eq("id", leadId).eq("user_id", u.id).maybeSingle();
+      if (!lead) return out({ error: "Lead nicht gefunden" }, 404);
+      const email = String(b?.email || lead.email || "").trim().toLowerCase();
+      if (!email) return out({ error: "Keine E-Mail vorhanden" }, 400);
+      const i = await integration(db, u.id, "reacher");
+      const { payload: p, endpoint } = await checkReacher(base(i.row.base_url), authHeaders(i.secret, i.row.config), email);
+      const reachable = String(p?.is_reachable || "unknown").toLowerCase();
+      const status = reachable === "safe" ? "valid" : reachable === "risky" ? "risky" : reachable === "invalid" ? "invalid" : "unknown";
+      const context = { ...(lead.research_context || {}), email_verification: { provider: "reacher", endpoint, checked_at: new Date().toISOString(), is_reachable: reachable, mx: p?.mx || null, smtp: p?.smtp || null, misc: p?.misc || null } };
+      const { error } = await db.from("energy_leads").update({ email, email_status: status, email_verified_at: new Date().toISOString(), research_context: context, updated_at: new Date().toISOString() }).eq("id", lead.id).eq("user_id", u.id);
+      if (error) throw error;
+      await db.from("energy_activities").insert({ user_id: u.id, lead_id: lead.id, activity_type: "email_verified", title: `E-Mail-Verifizierung: ${status}`, detail: `${email} · Reacher ${endpoint}` });
+      return out({ ok: true, email, status, is_reachable: reachable, endpoint, details: p });
+    }
+
+    return out({ error: "Unbekannte Aktion" }, 400);
+  } catch (e) {
+    return out({ error: e instanceof Error ? e.message.slice(0, 900) : "Intelligence Worker Fehler" }, 500);
   }
-
-  if(action==="verify_email"){
-   const leadId=String(b?.leadId||"");const {data:lead}=await db.from("energy_leads").select("*").eq("id",leadId).eq("user_id",u.id).maybeSingle();if(!lead)return out({error:"Lead nicht gefunden"},404);const email=String(b?.email||lead.email||"").trim().toLowerCase();if(!email)return out({error:"Keine E-Mail vorhanden"},400);const i=await integration(db,u.id,"reacher");const res=await timeoutFetch(`${base(i.row.base_url)}/v0/check_email`,{method:"POST",headers:authHeaders(i.secret,i.row.config),body:JSON.stringify({to_email:email})},30000);const p=await res.json().catch(()=>({}));if(!res.ok)throw new Error(p?.message||p?.error||`Reacher HTTP ${res.status}`);const reachable=String(p?.is_reachable||"unknown").toLowerCase();const status=reachable==="safe"?"valid":reachable==="risky"?"risky":reachable==="invalid"?"invalid":"unknown";const context={...(lead.research_context||{}),email_verification:{provider:"reacher",checked_at:new Date().toISOString(),is_reachable:reachable,mx:p?.mx||null,smtp:p?.smtp||null,misc:p?.misc||null}};const {error}=await db.from("energy_leads").update({email,email_status:status,email_verified_at:new Date().toISOString(),research_context:context,updated_at:new Date().toISOString()}).eq("id",lead.id).eq("user_id",u.id);if(error)throw error;await db.from("energy_activities").insert({user_id:u.id,lead_id:lead.id,activity_type:"email_verified",title:`E-Mail-Verifizierung: ${status}`,detail:email});return out({ok:true,email,status,is_reachable:reachable,details:p});
-  }
-
-  return out({error:"Unbekannte Aktion"},400);
- }catch(e){return out({error:e instanceof Error?e.message.slice(0,900):"Intelligence Worker Fehler"},500)}
 });
