@@ -24,11 +24,24 @@ jobs:
         run: |
           state=$([ "$STATE" = "success" ] && echo success || echo failure)
           curl -sS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.sha }} -d "{\"state\":\"$state\",\"context\":\"walkenhorst-ci/install\"}" >/dev/null
+      - id: audit
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          npm audit --omit=dev --audit-level=high 2>&1 | tee audit.log
+      - name: Publish dependency audit status
+        if: always() && steps.install.outcome == 'success'
+        env: { GH_TOKEN: "${{ github.token }}", STATE: "${{ steps.audit.outcome }}" }
+        run: |
+          state=$([ "$STATE" = "success" ] && echo success || echo failure)
+          curl -sS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.sha }} -d "{\"state\":\"$state\",\"context\":\"walkenhorst-ci/audit\"}" >/dev/null
       - id: typecheck
         if: steps.install.outcome == 'success'
         continue-on-error: true
         run: npm run typecheck
       - name: Publish typecheck status
+        if: always() && steps.install.outcome == 'success'
         env: { GH_TOKEN: "${{ github.token }}", STATE: "${{ steps.typecheck.outcome }}" }
         run: |
           state=$([ "$STATE" = "success" ] && echo success || echo failure)
@@ -39,12 +52,16 @@ jobs:
         run: |
           set -o pipefail
           npm run build 2>&1 | tee build.log
-      - name: Publish build status and error signature
-        env: { GH_TOKEN: "${{ github.token }}", STATE: "${{ steps.nextbuild.outcome }}", REPO: "${{ github.repository }}", SHA: "${{ github.sha }}" }
+      - name: Publish build status
+        if: always() && steps.install.outcome == 'success'
+        env: { GH_TOKEN: "${{ github.token }}", STATE: "${{ steps.nextbuild.outcome }}" }
         run: |
-          node <<'NODE'
-          const fs=require('fs');const state=process.env.STATE==='success'?'success':'failure';const log=fs.existsSync('build.log')?fs.readFileSync('build.log','utf8'):'';const lines=log.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);const candidate=lines.find(s=>/Error:|TypeError:|ReferenceError:|Failed to compile|Build error|prerender|Module not found|Export encountered/i.test(s))||lines.at(-1)||'unknown';const clean=candidate.replace(/[^a-zA-Z0-9._:/ -]+/g,' ').replace(/\s+/g,' ').slice(0,76);const contexts=['walkenhorst-ci/build'];if(state==='failure')contexts.push(`build-error/${clean}`.slice(0,100));(async()=>{for(const context of contexts)await fetch(`https://api.github.com/repos/${process.env.REPO}/statuses/${process.env.SHA}`,{method:'POST',headers:{Authorization:`Bearer ${process.env.GH_TOKEN}`,Accept:'application/vnd.github+json','Content-Type':'application/json'},body:JSON.stringify({state,context})})})().catch(e=>{console.error(e);process.exit(1)});
-          NODE
+          state=$([ "$STATE" = "success" ] && echo success || echo failure)
+          curl -sS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.sha }} -d "{\"state\":\"$state\",\"context\":\"walkenhorst-ci/build\"}" >/dev/null
+      - name: Show build error signature
+        if: steps.nextbuild.outcome == 'failure'
+        run: |
+          grep -E -m 1 'Error:|TypeError:|ReferenceError:|Failed to compile|Build error|prerender|Module not found|Export encountered' build.log || tail -n 40 build.log || true
       - name: Fail workflow if verification failed
-        if: steps.install.outcome != 'success' || steps.typecheck.outcome != 'success' || steps.nextbuild.outcome != 'success'
+        if: steps.install.outcome != 'success' || steps.audit.outcome != 'success' || steps.typecheck.outcome != 'success' || steps.nextbuild.outcome != 'success'
         run: exit 1
