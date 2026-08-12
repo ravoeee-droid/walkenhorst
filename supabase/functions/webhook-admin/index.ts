@@ -14,7 +14,7 @@ Deno.serve(async(req)=>{
   const u=await user(req);if(!u)return out({error:"Nicht autorisiert"},401);const b=await req.json().catch(()=>({}));const provider=String(b?.provider||"").trim().toLowerCase();if(!provider)return out({error:"Provider fehlt"},400);
   const token=`wh_${crypto.randomUUID().replaceAll("-","")}_${crypto.randomUUID().slice(0,12)}`;const hash=await sha256(token);const db=admin();
   const {error}=await db.from("energy_webhook_tokens").upsert({user_id:u.id,provider,token_hash:hash,active:true,rotated_at:new Date().toISOString()},{onConflict:"user_id,provider"});if(error)throw error;
-  const {url}=env();const webhookUrl=`${url}/functions/v1/intent-webhook?provider=${encodeURIComponent(provider)}&token=${encodeURIComponent(token)}`;
+  const {url}=env();const webhookUrl=provider==="rinkel"?`${url}/functions/v1/rinkel-webhook?token=${encodeURIComponent(token)}`:`${url}/functions/v1/intent-webhook?provider=${encodeURIComponent(provider)}&token=${encodeURIComponent(token)}`;
   return out({ok:true,provider,webhook_url:webhookUrl,notice:"Webhook-Token wird nur jetzt vollständig angezeigt. Bei Rotation ändert sich die URL."});
  }catch(e){return out({error:e instanceof Error?e.message.slice(0,700):"Webhook Setup fehlgeschlagen"},500)}
 });
