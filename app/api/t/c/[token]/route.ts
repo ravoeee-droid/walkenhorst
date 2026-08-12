@@ -3,7 +3,8 @@ import { postPublicEmailEvent } from "@/lib/email-public-event";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ token: string }> }) {
   const { token } = await context.params;
-  const target = req.nextUrl.searchParams.get("url") || "";
+  const rawTarget = req.nextUrl.searchParams.get("url") || "";
+  const target = rawTarget.replaceAll("&amp;", "&");
   let parsed: URL;
   try {
     parsed = new URL(target);
