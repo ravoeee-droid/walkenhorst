@@ -7,6 +7,7 @@ export function SystemModuleLinks(){
     <a className="os-btn small" href="/meetings">◎ Meeting Prep</a>
     <a className="os-btn small" href="/prep">Lead Prep</a>
     <a className="os-btn small" href="/pipeline">▦ Pipeline</a>
+    <a className="os-btn small" href="/analytics">↗ Revenue</a>
     <a className="os-btn small" href="/campaign-lab">A/B Campaign Lab</a>
     <a className="os-btn small" href="/proposals">Angebote</a>
     <a className="os-btn small" href="/health">● System Health</a>
