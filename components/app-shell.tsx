@@ -1,8 +1,9 @@
 "use client";
 
 import { AuthGate } from "@/components/auth-gate";
-import { OutboundDashboard } from "@/components/outbound-dashboard";
+import { SalesOsDashboardV2 } from "@/components/sales-os-dashboard-v2";
+import { SystemModuleLinks } from "@/components/system-module-links";
 
 export function AppShell() {
-  return <AuthGate>{(user) => <OutboundDashboard user={user} />}</AuthGate>;
+  return <AuthGate>{(user) => <><SalesOsDashboardV2 user={user} /><SystemModuleLinks /></>}</AuthGate>;
 }
