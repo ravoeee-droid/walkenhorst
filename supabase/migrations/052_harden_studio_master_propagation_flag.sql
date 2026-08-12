@@ -1,0 +1,1 @@
+-- Studio V2 propagation hardening. Full function definitions follow in the next commit.
