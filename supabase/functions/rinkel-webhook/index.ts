@@ -12,6 +12,35 @@ function date(value:unknown){const raw=String(value||"").trim();if(!raw)return n
 function eventType(p:any){if(p?.sentiment!==undefined||p?.topics!==undefined||p?.summary!==undefined)return"insights";if(p?.cause!==undefined||p?.callRecordingUrl!==undefined)return"end";if(p?.answeredBy!==undefined||p?.choice!==undefined)return"start";if(p?.to!==undefined&&p?.from!==undefined&&p?.userId!==undefined)return"outgoing";if(p?.to!==undefined&&p?.from!==undefined)return"incoming";return"unknown"}
 async function matchLead(db:any,userId:string,type:string,p:any){const counterpart=type==="outgoing"?phone(p?.to):type==="incoming"?phone(p?.from):null;if(!counterpart)return null;const {data}=await db.from("energy_leads").select("id").eq("user_id",userId).eq("phone_e164",counterpart).limit(1).maybeSingle();return data?.id||null}
 
+function titleFor(type:string){const titles:Record<string,string>={incoming:"Rinkel: eingehender Anruf",outgoing:"Rinkel: ausgehender Anruf",start:"Rinkel: Gespräch angenommen",end:"Rinkel: Gespräch beendet",insights:"Rinkel AI Insights",unknown:"Rinkel Call Event"};return titles[type]||titles.unknown}
+function detailFor(type:string,p:any){if(type==="end")return `${String(p?.cause||"ENDED")}${p?.callRecordingUrl?" · Recording verfügbar":""}`;if(type==="insights")return String(p?.summary||p?.sentiment||"AI Insights verfügbar").slice(0,1000);return null}
+
+async function applyLeadEffects(db:any,userId:string,leadId:string,externalId:string,type:string,p:any,occurred:string){
+  const activityType=`rinkel_${type}`;
+  const {data:existing}=await db.from("energy_activities").select("id").eq("user_id",userId).eq("lead_id",leadId).eq("activity_type",activityType).contains("metadata",{call_id:externalId,rinkel_event:type}).limit(1).maybeSingle();
+  if(!existing){
+    const inserted=await db.from("energy_activities").insert({user_id:userId,lead_id:leadId,activity_type:activityType,title:titleFor(type),detail:detailFor(type,p),metadata:{call_id:externalId,rinkel_event:type,sentiment:p?.sentiment||null,topics:p?.topics||null,recording_url:p?.callRecordingUrl||null}});
+    if(inserted.error)console.error("rinkel activity",inserted.error);
+  }
+  if(type==="outgoing"){
+    const {data:lead}=await db.from("energy_leads").select("status,last_contact_at").eq("id",leadId).eq("user_id",userId).single();
+    const leadUpdate:any={updated_at:new Date().toISOString()};
+    if(!lead?.last_contact_at||new Date(occurred).getTime()>new Date(lead.last_contact_at).getTime())leadUpdate.last_contact_at=occurred;
+    if(["new","research","ready"].includes(String(lead?.status||"")))leadUpdate.status="contacted";
+    await db.from("energy_leads").update(leadUpdate).eq("id",leadId).eq("user_id",userId);
+  }
+  if(type==="insights"&&String(p?.sentiment||"").toUpperCase()==="POSITIVE"){
+    const intent=await db.from("energy_intent_events").insert({user_id:userId,lead_id:leadId,source:"rinkel",event_type:"positive_call_sentiment",weight:15,external_id:`rinkel:${externalId}:insights`,metadata:{summary:p?.summary||null,topics:p?.topics||[]}});
+    if(intent.error&&intent.error.code!=="23505")console.error("rinkel intent",intent.error);
+  }
+}
+
+async function replayLeadEffects(db:any,userId:string,leadId:string,externalId:string){
+  const {data:events,error}=await db.from("energy_call_events").select("event_type,occurred_at,payload").eq("user_id",userId).eq("provider","rinkel").eq("external_call_id",externalId).order("occurred_at",{ascending:true});
+  if(error){console.error("rinkel replay",error);return}
+  for(const event of events||[])await applyLeadEffects(db,userId,leadId,externalId,String(event.event_type),event.payload||{},date(event.occurred_at));
+}
+
 async function processEvent(db:any,userId:string,p:any){
  const externalId=String(p?.id||"").trim();if(!externalId)return;
  const type=eventType(p);const occurred=date(p?.datetime);let {data:call}=await db.from("energy_calls").select("*").eq("user_id",userId).eq("provider","rinkel").eq("external_call_id",externalId).maybeSingle();
@@ -23,23 +52,17 @@ async function processEvent(db:any,userId:string,p:any){
  }
  const eventInsert=await db.from("energy_call_events").insert({user_id:userId,call_id:call.id,provider:"rinkel",external_call_id:externalId,event_type:type,occurred_at:occurred,payload:p}).select("id").single();
  if(eventInsert.error){if(eventInsert.error.code==="23505")return;throw eventInsert.error}
+ const newlyLinked=Boolean(leadId&&!call.lead_id);
  const updates:any={updated_at:new Date().toISOString(),raw_metadata:{...(call.raw_metadata||{}),last_event:type}};
- if(leadId&&!call.lead_id)updates.lead_id=leadId;
+ if(newlyLinked)updates.lead_id=leadId;
  if(type==="incoming"||type==="outgoing"){updates.direction=type;updates.from_phone=phone(p?.from);updates.to_phone=phone(p?.to);updates.rinkel_user_id=p?.userId?String(p.userId):call.rinkel_user_id;updates.started_at=occurred}
  if(type==="start"){updates.answered_at=occurred;updates.answered_by=p?.answeredBy?String(p.answeredBy):null;updates.rinkel_user_id=p?.userId?String(p.userId):call.rinkel_user_id}
  if(type==="end"){updates.ended_at=occurred;updates.cause=p?.cause?String(p.cause):null;updates.recording_url=p?.callRecordingUrl?String(p.callRecordingUrl):null}
  if(type==="insights"){updates.sentiment=p?.sentiment?String(p.sentiment):null;updates.topics=Array.isArray(p?.topics)?p.topics.map((x:unknown)=>String(x)).slice(0,8):[];updates.ai_summary=p?.summary?String(p.summary).slice(0,5000):null}
  await db.from("energy_calls").update(updates).eq("id",call.id).eq("user_id",userId);
  if(leadId){
-   const titles:Record<string,string>={incoming:"Rinkel: eingehender Anruf",outgoing:"Rinkel: ausgehender Anruf",start:"Rinkel: Gespräch angenommen",end:"Rinkel: Gespräch beendet",insights:"Rinkel AI Insights",unknown:"Rinkel Call Event"};
-   const detail=type==="end"?`${String(p?.cause||"ENDED")}${p?.callRecordingUrl?" · Recording verfügbar":""}`:type==="insights"?String(p?.summary||p?.sentiment||"AI Insights verfügbar").slice(0,1000):null;
-   await db.from("energy_activities").insert({user_id:userId,lead_id:leadId,activity_type:`rinkel_${type}`,title:titles[type],detail,metadata:{call_id:externalId,rinkel_event:type,sentiment:p?.sentiment||null,topics:p?.topics||null,recording_url:p?.callRecordingUrl||null}});
-   if(type==="outgoing"){
-     const {data:lead}=await db.from("energy_leads").select("status").eq("id",leadId).eq("user_id",userId).single();const leadUpdate:any={last_contact_at:occurred,updated_at:new Date().toISOString()};if(["new","research","ready"].includes(String(lead?.status||"")))leadUpdate.status="contacted";await db.from("energy_leads").update(leadUpdate).eq("id",leadId).eq("user_id",userId);
-   }
-   if(type==="insights"&&String(p?.sentiment||"").toUpperCase()==="POSITIVE"){
-     const intent=await db.from("energy_intent_events").insert({user_id:userId,lead_id:leadId,source:"rinkel",event_type:"positive_call_sentiment",weight:15,external_id:`rinkel:${externalId}:insights`,metadata:{summary:p?.summary||null,topics:p?.topics||[]}});if(intent.error&&intent.error.code!=="23505")console.error("rinkel intent",intent.error);
-   }
+   if(newlyLinked)await replayLeadEffects(db,userId,leadId,externalId);
+   else await applyLeadEffects(db,userId,leadId,externalId,type,p,occurred);
  }
 }
 
