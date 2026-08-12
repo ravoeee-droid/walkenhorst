@@ -16,6 +16,7 @@ export function SystemModuleLinks(){
     <a className="os-btn small" href="/launch">✓ Go-Live</a>
     <a className="os-btn small" href="/data">⇄ Daten</a>
     <a className="os-btn small" href="/health">● System Health</a>
+    <a className="os-btn small" href="/settings">⚙ Settings</a>
     <a className="os-btn small" href="/integrations">⌘ Apps</a>
   </nav>;
 }
