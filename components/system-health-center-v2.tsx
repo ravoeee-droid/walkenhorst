@@ -1,0 +1,43 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { User } from "@supabase/supabase-js";
+import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
+
+type Mailbox={id:string;email_address:string;status:string;last_error:string|null;last_bounce_error:string|null;last_sync_at:string|null;last_bounce_sync_at:string|null};
+type Integration={id:string;provider:string;status:string;last_error:string|null;last_tested_at:string|null};
+type Call={id:string;reconciliation_error:string|null;cdr_synced_at:string|null;transcript_synced_at:string|null;ended_at:string|null};
+type Outbox={id:number;status:string;last_error:string|null;created_at:string};
+type Bounce={id:number;bounce_type:string;created_at:string};
+const REQUIRED=["walkenhorst-outbound-worker","walkenhorst-inbox-worker","walkenhorst-automation-worker","walkenhorst-rinkel-reconcile","walkenhorst-bounce-worker"];
+function fmt(v:string|null|undefined){if(!v)return"—";try{return new Intl.DateTimeFormat("de-DE",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}).format(new Date(v))}catch{return"—"}}
+
+export function SystemHealthCenterV2({user}:{user:User}){
+ const supabase=useMemo(()=>createSupabaseBrowserClient(),[]);const[health,setHealth]=useState<any>(null);const[mailboxes,setMailboxes]=useState<Mailbox[]>([]);const[integrations,setIntegrations]=useState<Integration[]>([]);const[calls,setCalls]=useState<Call[]>([]);const[outbox,setOutbox]=useState<Outbox[]>([]);const[bounces,setBounces]=useState<Bounce[]>([]);const[error,setError]=useState<string|null>(null);const[busy,setBusy]=useState(false);
+ const load=useCallback(async()=>{if(!supabase)return;setBusy(true);setError(null);try{const since=new Date(Date.now()-24*3600_000).toISOString();const[h,mb,i,c,o,b]=await Promise.all([
+  supabase.functions.invoke("system-health",{body:{}}),
+  supabase.from("energy_mailboxes").select("id,email_address,status,last_error,last_bounce_error,last_sync_at,last_bounce_sync_at").eq("user_id",user.id).order("email_address"),
+  supabase.from("energy_integrations").select("id,provider,status,last_error,last_tested_at").eq("user_id",user.id).order("provider"),
+  supabase.from("energy_calls").select("id,reconciliation_error,cdr_synced_at,transcript_synced_at,ended_at").eq("user_id",user.id).not("ended_at","is",null).order("ended_at",{ascending:false}).limit(500),
+  supabase.from("energy_automation_outbox").select("id,status,last_error,created_at").eq("user_id",user.id).gte("created_at",since).order("created_at",{ascending:false}).limit(1000),
+  supabase.from("energy_bounces").select("id,bounce_type,created_at").eq("user_id",user.id).gte("created_at",since).limit(1000),
+ ]);if(h.error)setError(h.error.message);else setHealth(h.data);if(!mb.error)setMailboxes((mb.data||[]) as Mailbox[]);if(!i.error)setIntegrations((i.data||[]) as Integration[]);if(!c.error)setCalls((c.data||[]) as Call[]);if(!o.error)setOutbox((o.data||[]) as Outbox[]);if(!b.error)setBounces((b.data||[]) as Bounce[])}catch(x){setError(x instanceof Error?x.message:"System Health konnte nicht geladen werden")}finally{setBusy(false)}},[supabase,user.id]);useEffect(()=>{void load()},[load]);
+ const rawJobs=Array.isArray(health?.jobs)?health.jobs:Array.isArray(health?.cron_jobs)?health.cron_jobs:Array.isArray(health?.crons)?health.crons:[];const jobs=rawJobs.map((j:any)=>({name:String(j.jobname||j.name||""),active:j.active!==false,schedule:String(j.schedule||"—")}));const activeRequired=REQUIRED.filter(name=>jobs.some((j:any)=>j.name===name&&j.active)).length;
+ const mailboxErrors=mailboxes.filter(m=>m.status==="error"||m.last_error||m.last_bounce_error).length;const integrationErrors=integrations.filter(i=>i.status==="error").length;const reconcileErrors=calls.filter(c=>c.reconciliation_error).length;const automationErrors=outbox.filter(o=>["failed","error"].includes(o.status)).length;const hardBounces=bounces.filter(b=>b.bounce_type==="hard").length;
+ const issues=(5-activeRequired)+mailboxErrors+integrationErrors+reconcileErrors+automationErrors;const score=Math.max(0,100-Math.min(100,issues*12));const state=score>=90?"Healthy":score>=70?"Beobachten":"Handlungsbedarf";
+ const modules=[
+  {href:"/deliverability",title:"Deliverability",text:"Bounce Rate, Mailbox-Ramping und Versandgesundheit",value:`${hardBounces} hard / 24h`},
+  {href:"/suppression",title:"Suppression",text:"Persistente DNC-, E-Mail-, Telefon- und Domain-Sperren",value:"Re-Import geschützt"},
+  {href:"/data-hygiene",title:"Data Hygiene",text:"Dubletten finden und transaktional zusammenführen",value:"Safe Merge"},
+  {href:"/revival",title:"Revival",text:"Vergessene gute Chancen wieder priorisieren",value:"No Auto-Send"},
+  {href:"/integrations",title:"Integrationen",text:"Rinkel, Chatwoot, Activepieces und Intelligence Provider",value:`${integrations.filter(i=>i.status==="ready").length} ready`},
+ ];
+ return <main className="os-root" style={{minHeight:"100vh"}}><div className="os-content" style={{maxWidth:1400,margin:"0 auto",paddingTop:28}}>
+  <div className="os-section-head"><div><div className="os-kicker">Operations Control</div><h1 className="os-title">System & Data Health</h1><p>Worker, Integrationen, Deliverability und CRM-Datenqualität in einem Kontrollzentrum.</p></div><div className="os-toolbar"><a className="os-btn" href="/command">← Heute</a><button className="os-btn" disabled={busy} onClick={()=>void load()}>↻ Vollcheck</button></div></div>{error?<div className="os-error">{error}</div>:null}
+  <div className="os-grid os-kpis" style={{marginTop:18}}>{[[score,"Health Score",state],[`${activeRequired}/5`,"Kernjobs","aktiv erkannt"],[mailboxErrors,"Mailbox Fehler",`${mailboxes.length} gesamt`],[integrationErrors,"Integration Fehler",`${integrations.length} verbunden`],[reconcileErrors+automationErrors,"Worker/Data Fehler","Reconcile + Automation"]].map(([v,l,s])=><div className="os-card os-kpi" key={String(l)}><div className="os-kpi-label">{l}</div><div className="os-kpi-value">{v}</div><div className="os-kpi-sub">{s}</div></div>)}</div>
+  <section className="os-card os-section" style={{marginTop:18}}><div className="os-section-head"><div><div className="os-kicker">Core Workers</div><h2>5 Hintergrundjobs erwartet</h2></div><span className={`os-pill ${activeRequired===5?"green":"hot"}`}>{activeRequired===5?"vollständig":"prüfen"}</span></div><div className="os-grid" style={{gridTemplateColumns:"repeat(auto-fit,minmax(230px,1fr))",gap:9}}>{REQUIRED.map(name=>{const j=jobs.find((x:any)=>x.name===name);return <div className="os-callout" key={name}><span className={`os-pill ${j?.active?"green":"hot"}`}>{j?.active?"aktiv":"nicht erkannt"}</span><strong style={{display:"block",fontSize:10,marginTop:7}}>{name.replace("walkenhorst-","")}</strong><small>{j?.schedule||"Worker-Status aus Health Endpoint"}</small></div>})}</div></section>
+  <section className="os-grid" style={{gridTemplateColumns:"repeat(auto-fit,minmax(270px,1fr))",gap:12,marginTop:18}}>{modules.map(m=><a href={m.href} className="os-card os-section" key={m.href} style={{display:"block",textDecoration:"none"}}><div className="os-section-head"><div><div className="os-kicker">Operations Modul</div><h2>{m.title}</h2></div><span className="os-pill">{m.value}</span></div><p style={{fontSize:10,color:"#7d889d",lineHeight:1.5}}>{m.text}</p><strong style={{fontSize:10,color:"#ff6b16"}}>Öffnen →</strong></a>)}</section>
+  <div className="os-columns" style={{marginTop:18}}><section className="os-card os-section"><div className="os-kicker">Mailboxen</div><h2>Sending / Inbox / Bounce</h2>{mailboxes.length?mailboxes.map(m=><div className="os-detail-row" key={m.id}><span>{m.email_address}<small style={{display:"block"}}>Inbox {fmt(m.last_sync_at)} · Bounce {fmt(m.last_bounce_sync_at)}</small></span><span className={`os-pill ${m.status==="ready"&&!m.last_error&&!m.last_bounce_error?"green":"hot"}`}>{m.last_bounce_error||m.last_error||m.status}</span></div>):<div className="os-empty">Keine Mailboxen.</div>}</section><section className="os-card os-section"><div className="os-kicker">Integrationen</div><h2>Provider Health</h2>{integrations.length?integrations.map(i=><div className="os-detail-row" key={i.id}><span>{i.provider}<small style={{display:"block"}}>Test {fmt(i.last_tested_at)}</small></span><span className={`os-pill ${i.status==="ready"?"green":i.status==="error"?"hot":""}`}>{i.last_error||i.status}</span></div>):<div className="os-empty">Keine externen Provider konfiguriert.</div>}</section></div>
+  <div className="os-source" style={{marginTop:12}}>Nutzer: {user.email} · Health Endpoint + RLS-geschützte operative Tabellen.</div>
+ </div></main>;
+}
