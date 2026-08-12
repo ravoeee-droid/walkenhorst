@@ -8,6 +8,7 @@ type Lead={id:string;company_name:string;contact_name:string|null;phone:string|n
 type Followup={id:string;lead_id:string;title:string;due_at:string;priority:string;status:string;reason:string|null};
 type Activity={id:string;lead_id:string|null;activity_type:string;title:string;detail:string|null;metadata:Record<string,unknown>|null;created_at:string};
 type Video={lead_id:string;slug:string;status:string};
+type RinkelCall={id:string;lead_id:string|null;external_call_id:string;direction:string;from_phone:string|null;to_phone:string|null;answered_by:string|null;started_at:string|null;answered_at:string|null;ended_at:string|null;cause:string|null;recording_url:string|null;sentiment:string|null;topics:string[];ai_summary:string|null;created_at:string;updated_at:string};
 
 type Outcome="no_answer"|"reached"|"interested"|"meeting"|"callback"|"not_interested"|"wrong_number";
 const OUTCOMES:Array<{id:Outcome;label:string;className?:string}>=[
@@ -19,19 +20,20 @@ function due(f:Followup|undefined){return Boolean(f&&new Date(f.due_at).getTime(
 
 export function CallerQueue({user}:{user:User}){
   const supabase=useMemo(()=>createSupabaseBrowserClient(),[]);
-  const [leads,setLeads]=useState<Lead[]>([]);const [followups,setFollowups]=useState<Followup[]>([]);const [activities,setActivities]=useState<Activity[]>([]);const [videos,setVideos]=useState<Video[]>([]);
+  const [leads,setLeads]=useState<Lead[]>([]);const [followups,setFollowups]=useState<Followup[]>([]);const [activities,setActivities]=useState<Activity[]>([]);const [videos,setVideos]=useState<Video[]>([]);const [calls,setCalls]=useState<RinkelCall[]>([]);
   const [selectedId,setSelectedId]=useState<string|null>(null);const [note,setNote]=useState("");const [callbackAt,setCallbackAt]=useState("");const [busy,setBusy]=useState(false);const [error,setError]=useState<string|null>(null);const [notice,setNotice]=useState<string|null>(null);
 
   const load=useCallback(async()=>{
     if(!supabase)return;
     const today=new Date();today.setHours(0,0,0,0);
-    const [l,f,a,v]=await Promise.all([
+    const [l,f,a,v,c]=await Promise.all([
       supabase.from("energy_leads").select("id,company_name,contact_name,phone,email,city,industry,total_score,intent_score,pitch,next_action,status,last_contact_at,metadata,updated_at").eq("user_id",user.id).not("phone","is",null).limit(2000),
       supabase.from("energy_followups").select("id,lead_id,title,due_at,priority,status,reason").eq("user_id",user.id).eq("status","open").order("due_at",{ascending:true}).limit(2000),
       supabase.from("energy_activities").select("id,lead_id,activity_type,title,detail,metadata,created_at").eq("user_id",user.id).gte("created_at",today.toISOString()).order("created_at",{ascending:false}).limit(1500),
       supabase.from("energy_video_pages").select("lead_id,slug,status").eq("user_id",user.id).neq("status","archived").limit(3000),
+      supabase.from("energy_calls").select("id,lead_id,external_call_id,direction,from_phone,to_phone,answered_by,started_at,answered_at,ended_at,cause,recording_url,sentiment,topics,ai_summary,created_at,updated_at").eq("user_id",user.id).order("updated_at",{ascending:false}).limit(2000),
     ]);
-    if(l.error){setError(l.error.message);return}setLeads((l.data||[]) as Lead[]);if(!f.error)setFollowups((f.data||[]) as Followup[]);if(!a.error)setActivities((a.data||[]) as Activity[]);if(!v.error)setVideos((v.data||[]) as Video[]);
+    if(l.error){setError(l.error.message);return}setLeads((l.data||[]) as Lead[]);if(!f.error)setFollowups((f.data||[]) as Followup[]);if(!a.error)setActivities((a.data||[]) as Activity[]);if(!v.error)setVideos((v.data||[]) as Video[]);if(!c.error)setCalls((c.data||[]) as RinkelCall[]);
   },[supabase,user.id]);
   useEffect(()=>{void load()},[load]);
 
@@ -40,17 +42,20 @@ export function CallerQueue({user}:{user:User}){
       const f=followups.find(x=>x.lead_id===l.id);
       let priority=l.intent_score*3+l.total_score*2;
       if(l.status==="engaged")priority+=350;if(l.status==="meeting")priority+=500;if(f?.priority==="hot")priority+=450;if(due(f))priority+=500;if(!l.last_contact_at)priority+=80;
-      const reason=f?.reason||f?.title||(l.intent_score>=70?`Intent ${l.intent_score}/100`:l.total_score>=75?`A-Lead ${l.total_score}/100`:l.next_action||"Outbound bereit");
+      const lastCall=calls.find(c=>c.lead_id===l.id);if(lastCall?.sentiment==="POSITIVE")priority+=220;
+      const reason=f?.reason||f?.title||(lastCall?.sentiment==="POSITIVE"?"Rinkel AI: positives Gesprächssignal":l.intent_score>=70?`Intent ${l.intent_score}/100`:l.total_score>=75?`A-Lead ${l.total_score}/100`:l.next_action||"Outbound bereit");
       return{lead:l,followup:f,priority,reason};
     }).sort((a,b)=>b.priority-a.priority);
-  },[leads,followups]);
+  },[leads,followups,calls]);
 
   useEffect(()=>{if(!selectedId&&queue.length)setSelectedId(queue[0].lead.id);if(selectedId&&!queue.some(q=>q.lead.id===selectedId))setSelectedId(queue[0]?.lead.id||null)},[queue,selectedId]);
   const selected=queue.find(q=>q.lead.id===selectedId)||queue[0]||null;
   const callsToday=activities.filter(a=>a.activity_type==="call_outcome").length;
   const meetingsToday=activities.filter(a=>a.activity_type==="call_outcome"&&(a.metadata as any)?.outcome==="meeting").length;
   const interestedToday=activities.filter(a=>a.activity_type==="call_outcome"&&["interested","meeting"].includes(String((a.metadata as any)?.outcome||""))).length;
+  const rinkelToday=calls.filter(c=>c.started_at&&new Date(c.started_at).toDateString()===new Date().toDateString()).length;
   const hot=queue.filter(q=>q.lead.intent_score>=70||q.followup?.priority==="hot").length;
+  const selectedCalls=selected?calls.filter(c=>c.lead_id===selected.lead.id).slice(0,6):[];
 
   async function record(outcome:Outcome){
     if(!supabase||!selected)return;setBusy(true);setError(null);setNotice(null);
@@ -64,13 +69,13 @@ export function CallerQueue({user}:{user:User}){
   }
 
   return <main className="os-root" style={{minHeight:"100vh"}}><div className="os-content" style={{maxWidth:1400,margin:"0 auto",paddingTop:28}}>
-    <div className="os-section-head"><div><div className="os-kicker">Sales Execution</div><h1 className="os-title">Caller Queue</h1><p>Die stärksten Leads zuerst. Anrufen → Ergebnis klicken → nächster Lead.</p></div><div className="os-toolbar"><a className="os-btn" href="/dashboard">← Dashboard</a><button className="os-btn" disabled={busy} onClick={()=>void load()}>↻ Queue aktualisieren</button></div></div>
+    <div className="os-section-head"><div><div className="os-kicker">Sales Execution</div><h1 className="os-title">Caller Queue</h1><p>Die stärksten Leads zuerst. Anrufen → Ergebnis klicken → nächster Lead.</p></div><div className="os-toolbar"><a className="os-btn" href="/dashboard">← Dashboard</a><a className="os-btn" href="/integrations">Rinkel Setup</a><button className="os-btn" disabled={busy} onClick={()=>void load()}>↻ Queue aktualisieren</button></div></div>
     {error?<div className="os-error">{error}</div>:null}{notice?<div className="os-success">{notice}</div>:null}
-    <div className="os-grid os-kpis" style={{marginTop:18}}>{[[queue.length,"Call Queue","offene Kontakte"],[hot,"Hot Leads","Intent / Follow-up"],[callsToday,"Calls heute","gespeichert"],[interestedToday,"Interesse heute","inkl. Termine"],[meetingsToday,"Termine heute","Call Outcome"]].map(([v,l,s])=><div className="os-card os-kpi" key={String(l)}><div className="os-kpi-label">{l}</div><div className="os-kpi-value">{v}</div><div className="os-kpi-sub">{s}</div></div>)}</div>
+    <div className="os-grid os-kpis" style={{marginTop:18}}>{[[queue.length,"Call Queue","offene Kontakte"],[hot,"Hot Leads","Intent / Follow-up"],[callsToday,"Outcomes heute","manuell gespeichert"],[rinkelToday,"Rinkel Calls","heute erkannt"],[meetingsToday,"Termine heute",`${interestedToday} Interesse+`]].map(([v,l,s])=><div className="os-card os-kpi" key={String(l)}><div className="os-kpi-label">{l}</div><div className="os-kpi-value">{v}</div><div className="os-kpi-sub">{s}</div></div>)}</div>
 
     <div className="os-columns" style={{gridTemplateColumns:"minmax(0,1.1fr) minmax(390px,.8fr)",marginTop:18}}>
       <section className="os-card"><div className="os-section" style={{marginBottom:0}}><div className="os-section-head"><div><div className="os-kicker">Priorisiert</div><h2>Nächste Anrufe</h2></div><span className="os-pill hot">{queue.length}</span></div></div>
-        <div className="os-tablewrap"><table className="os-table"><thead><tr><th>Unternehmen</th><th>Score</th><th>Intent</th><th>Warum jetzt?</th><th>Letzter Call</th></tr></thead><tbody>{queue.slice(0,150).map(q=><tr key={q.lead.id} onClick={()=>setSelectedId(q.lead.id)} style={{cursor:"pointer",background:selected?.lead.id===q.lead.id?"rgba(255,107,22,.05)":undefined}}><td><strong>{q.lead.company_name}</strong><small style={{display:"block"}}>{q.lead.contact_name||q.lead.city||q.lead.industry||""}</small></td><td><div className="os-score">{q.lead.total_score}</div></td><td><span className={`os-pill ${q.lead.intent_score>=70?"hot":""}`}>{q.lead.intent_score}</span></td><td><strong>{q.reason}</strong>{q.followup?<small style={{display:"block"}}>fällig {fmt(q.followup.due_at)}</small>:null}</td><td>{fmt(q.lead.last_contact_at)}</td></tr>)}</tbody></table></div>
+        <div className="os-tablewrap"><table className="os-table"><thead><tr><th>Unternehmen</th><th>Score</th><th>Intent</th><th>Warum jetzt?</th><th>Letzter Call</th></tr></thead><tbody>{queue.slice(0,150).map(q=><tr key={q.lead.id} onClick={()=>setSelectedId(q.lead.id)} style={{cursor:"pointer",background:selected?.lead.id===q.lead.id?"rgba(255,107,22,.05)":undefined}}><td><strong>{q.lead.company_name}</strong><small style={{display:"block"}}>{q.lead.contact_name||q.lead.city||q.lead.industry||""}</small></td><td><div className="os-score">{q.lead.total_score}</div></td><td><span className={`os-pill ${q.lead.intent_score>=70?"hot":""}`}>{q.lead.intent_score}</span></td><td><strong>{q.reason}</strong>{q.followup?<small style={{display:"block"}}>fällig {fmt(q.followup.due_at)}</small>:null}</td><td>{fmt(calls.find(c=>c.lead_id===q.lead.id)?.started_at||q.lead.last_contact_at)}</td></tr>)}</tbody></table></div>
       </section>
 
       <aside className="os-grid" style={{alignSelf:"start",position:"sticky",top:18}}>{selected?<section className="os-card os-section">
@@ -82,6 +87,7 @@ export function CallerQueue({user}:{user:User}){
         <div className="os-field"><label>Call Notiz</label><textarea value={note} onChange={e=>setNote(e.target.value)} placeholder="Einwand, Bedarf, Verbrauch, Zeitpunkt …"/></div>
         <div className="os-field"><label>Rückrufzeit</label><input type="datetime-local" value={callbackAt} onChange={e=>setCallbackAt(e.target.value)}/></div>
         <div className="os-grid" style={{gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,marginTop:12}}>{OUTCOMES.map(o=><button key={o.id} className={`os-btn ${o.className||""}`} disabled={busy} onClick={()=>void record(o.id)}>{o.label}</button>)}</div>
+        <div className="os-tabs"><button className="os-tab active">Rinkel Verlauf</button></div><div className="os-timeline">{selectedCalls.length?selectedCalls.map(c=><div className="os-event" key={c.id}><div className="os-toolbar" style={{justifyContent:"space-between"}}><strong>{c.direction==="outgoing"?"Ausgehend":"Eingehend"} · {c.cause||c.sentiment||"Call"}</strong><span className={`os-pill ${c.sentiment==="POSITIVE"?"green":c.sentiment==="NEGATIVE"?"hot":""}`}>{c.sentiment||"Rinkel"}</span></div>{c.ai_summary?<div style={{marginTop:5}}>{c.ai_summary}</div>:null}{c.topics?.length?<small style={{display:"block",marginTop:4}}>Topics: {c.topics.join(" · ")}</small>:null}<small>{fmt(c.started_at)}{c.answered_by?` · ${c.answered_by}`:""}</small>{c.recording_url?<a className="os-btn small" style={{marginTop:6}} target="_blank" rel="noreferrer" href={c.recording_url}>Recording ↗</a>:null}</div>):<div className="os-empty">Noch kein Rinkel-Call zu diesem Lead.</div>}</div>
         <div className="os-tabs"><button className="os-tab active">Heute</button></div><div className="os-timeline">{activities.filter(a=>a.lead_id===selected.lead.id).slice(0,8).map(a=><div className="os-event" key={a.id}><strong>{a.title}</strong>{a.detail?<div>{a.detail}</div>:null}<small>{fmt(a.created_at)}</small></div>)}{!activities.some(a=>a.lead_id===selected.lead.id)?<div className="os-empty">Heute noch keine Aktivität.</div>:null}</div>
       </section>:<section className="os-card os-empty">Keine Leads mit gültiger Telefonnummer in der Queue.</section>}</aside>
     </div>
