@@ -71,14 +71,14 @@ export function SystemHealthCenter({user}:{user:User}){
     </div>
 
     <div className="os-columns" style={{marginTop:18}}>
-      <section className="os-card os-section"><div className="os-section-head"><div><div className="os-kicker">Core Workers</div><h2>Automatische Hintergrundjobs</h2></div><span className={`os-pill ${missingJobs.length?"hot":"green"}`}>{missingJobs.length?`${missingJobs.length} fehlt":"vollständig"}</span></div>
+      <section className="os-card os-section"><div className="os-section-head"><div><div className="os-kicker">Core Workers</div><h2>Automatische Hintergrundjobs</h2></div><span className={`os-pill ${missingJobs.length?"hot":"green"}`}>{missingJobs.length?`${missingJobs.length} fehlt`:"vollständig"}</span></div>
         {(health?.jobs||[]).map(j=><div className="os-checkrow" key={j.jobname}><span className={`os-pill ${jobHealthy(j)?"green":"hot"}`}>{j.last_status||"noch kein Lauf"}</span><div><strong>{j.jobname}</strong><small>{j.schedule} · zuletzt {fmt(j.last_started_at)}{j.last_message?` · ${j.last_message}`:""}</small></div><span>{j.active?"aktiv":"aus"}</span></div>)}
         {missingJobs.length?<div className="os-error" style={{marginTop:10}}>Fehlende Jobs: {missingJobs.join(", ")}</div>:null}
         <div className="os-toolbar" style={{marginTop:14}}><button className="os-btn primary" disabled={busy} onClick={()=>void runOutbound()}>Outbound jetzt ausführen</button><button className="os-btn" disabled={busy||!readyMailboxes.some(m=>m.imap_host)} onClick={()=>void syncInbox()}>Inbox jetzt synchronisieren</button></div>
       </section>
 
       <section className="os-card os-section"><div className="os-section-head"><div><div className="os-kicker">System Load</div><h2>Aktueller Betrieb</h2></div></div>
-        {[ [stats.leads,"Leads im CRM"],[stats.activeCampaigns,"Aktive Kampagnen"],[stats.pendingAutomation,"Automation Jobs offen"],[stats.failedAutomation,"Automation dauerhaft fehlgeschlagen"],[stats.failedMessages,"E-Mail-Fehler letzte 24h"] ].map(([v,l])=><div className="os-detail-row" key={String(l)}><span>{l}</span><strong>{v}</strong></div>)}
+        {[[stats.leads,"Leads im CRM"],[stats.activeCampaigns,"Aktive Kampagnen"],[stats.pendingAutomation,"Automation Jobs offen"],[stats.failedAutomation,"Automation dauerhaft fehlgeschlagen"],[stats.failedMessages,"E-Mail-Fehler letzte 24h"]].map(([v,l])=><div className="os-detail-row" key={String(l)}><span>{l}</span><strong>{v}</strong></div>)}
       </section>
     </div>
 
