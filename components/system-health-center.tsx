@@ -23,7 +23,7 @@ export function SystemHealthCenter({user}:{user:User}){
     if(!supabase)return;setError(null);
     const since=new Date(Date.now()-24*60*60*1000).toISOString();
     const [h,i,m,fm,pa,fa,ac,l]=await Promise.all([
-      supabase.rpc("energy_system_health"),
+      supabase.functions.invoke("system-health",{body:{}}),
       supabase.from("energy_integrations").select("id,provider,label,status,last_tested_at,last_error,base_url").eq("user_id",user.id).order("provider"),
       supabase.from("energy_mailboxes").select("id,email_address,status,daily_limit,sent_today,imap_host,last_tested_at,last_sync_at,last_error").eq("user_id",user.id).order("email_address"),
       supabase.from("energy_messages").select("id",{count:"exact",head:true}).eq("user_id",user.id).eq("status","failed").gte("created_at",since),
