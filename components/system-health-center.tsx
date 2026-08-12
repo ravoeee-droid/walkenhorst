@@ -27,7 +27,7 @@ export function SystemHealthCenter({user}:{user:User}){
       supabase.from("energy_integrations").select("id,provider,label,status,last_tested_at,last_error,base_url").eq("user_id",user.id).order("provider"),
       supabase.from("energy_mailboxes").select("id,email_address,status,daily_limit,sent_today,imap_host,last_tested_at,last_sync_at,last_error").eq("user_id",user.id).order("email_address"),
       supabase.from("energy_messages").select("id",{count:"exact",head:true}).eq("user_id",user.id).eq("status","failed").gte("created_at",since),
-      supabase.from("energy_automation_outbox").select("id",{count:"exact",head:true}).eq("user_id",user.id).in("status",["pending","retry"]),
+      supabase.from("energy_automation_outbox").select("id",{count:"exact",head:true}).eq("user_id",user.id).in("status",["queued","sending"]),
       supabase.from("energy_automation_outbox").select("id",{count:"exact",head:true}).eq("user_id",user.id).eq("status","failed"),
       supabase.from("energy_campaigns").select("id",{count:"exact",head:true}).eq("user_id",user.id).eq("status","active"),
       supabase.from("energy_leads").select("id",{count:"exact",head:true}).eq("user_id",user.id),
