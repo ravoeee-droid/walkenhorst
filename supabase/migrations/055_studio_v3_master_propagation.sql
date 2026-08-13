@@ -43,4 +43,22 @@ returns trigger
 language plpgsql
 security definer
 set search_path = pg_catalog, public
-as $$;
+as $$
+begin
+  perform set_config('app.studio_propagating','1',true);
+  insert into public.energy_studio_configs(
+    user_id,lead_id,scope,template_key,name,config,inherits_global,brand_kit_id,
+    autosave_revision,published_revision,last_autosaved_at,landing_enabled,created_at,updated_at
+  )
+  select g.user_id,new.id,'lead',g.template_key,g.name,g.config,true,g.brand_kit_id,
+         g.autosave_revision,g.published_revision,g.last_autosaved_at,g.landing_enabled,now(),now()
+  from public.energy_studio_configs g
+  where g.user_id=new.user_id and g.scope='global' and g.lead_id is null
+  on conflict do nothing;
+  perform set_config('app.studio_propagating','0',true);
+  return new;
+exception when others then
+  perform set_config('app.studio_propagating','0',true);
+  raise;
+end;
+$$;
