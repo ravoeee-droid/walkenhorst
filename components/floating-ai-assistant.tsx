@@ -74,8 +74,8 @@ export function FloatingAiAssistant({ user }: { user: User }) {
     const prompt = text.trim();
     if (!prompt || busy || !supabase) return;
     const userMessage = newMessage("user", prompt);
-    const nextMessages = [...messages, userMessage];
-    setMessages(nextMessages);
+    const priorHistory = messages.slice(-10).map(({ role, content }) => ({ role, content }));
+    setMessages((current) => [...current, userMessage]);
     setInput("");
     setBusy(true);
     setError(null);
@@ -88,7 +88,7 @@ export function FloatingAiAssistant({ user }: { user: User }) {
         body: JSON.stringify({
           message: prompt,
           path: typeof window !== "undefined" ? `${window.location.pathname}${window.location.search}` : pathname,
-          history: nextMessages.slice(-10).map(({ role, content }) => ({ role, content })),
+          history: priorHistory,
         }),
       });
       const data = await response.json();
