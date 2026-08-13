@@ -4,9 +4,11 @@ import { studioApiClient, studioApiUser } from "@/lib/studio-api-auth";
 export const runtime = "nodejs";
 
 type ChatMessage = { role: "user" | "assistant"; content: string };
+type StudioActionName = "select_lead" | "master" | "save" | "publish" | "mode";
+type StudioMode = "video" | "landing" | "brand" | "versions" | "render";
 type ClientAction =
   | { type: "navigate"; path: string }
-  | { type: "studio"; action: "select_lead" | "master" | "save" | "publish" | "mode"; leadId?: string; mode?: "video" | "landing" | "brand" | "versions" | "render" }
+  | { type: "studio"; action: StudioActionName; leadId?: string; mode?: StudioMode }
   | { type: "data_changed"; table: string; id?: string };
 
 const LEAD_STATUSES = new Set(["new", "research", "ready", "contacted", "engaged", "qualified", "meeting", "proposal", "won", "lost", "nurture"]);
@@ -14,16 +16,18 @@ const CAMPAIGN_STATUSES = new Set(["draft", "active", "paused", "completed"]);
 const MAILBOX_STATUSES = new Set(["setup", "warming", "ready", "paused", "error"]);
 const FOLLOWUP_STATUSES = new Set(["open", "done", "cancelled"]);
 const FOLLOWUP_PRIORITIES = new Set(["low", "normal", "high", "hot"]);
+const STUDIO_ACTIONS = new Set<StudioActionName>(["select_lead", "master", "save", "publish", "mode"]);
+const STUDIO_MODES = new Set<StudioMode>(["video", "landing", "brand", "versions", "render"]);
 
-function compact<T>(value: T[] | null | undefined) {
+function compact<T = any>(value: T[] | null | undefined): T[] {
   return Array.isArray(value) ? value : [];
 }
 
 function responseText(response: any) {
   const chunks: string[] = [];
-  for (const item of compact(response?.output)) {
+  for (const item of compact<any>(response?.output)) {
     if (item?.type !== "message") continue;
-    for (const content of compact(item?.content)) {
+    for (const content of compact<any>(item?.content)) {
       if (content?.type === "output_text" && typeof content.text === "string") chunks.push(content.text);
     }
   }
@@ -92,7 +96,7 @@ const tools = [
   {
     type: "function",
     name: "studio_action",
-    description: "Steuert das Studio V3: Lead wählen, Master öffnen, Ansicht wechseln, speichern oder den aktuell ausgewählten Lead veröffentlichen.",
+    description: "Steuert Studio V3: einen Lead wählen, Master öffnen, Ansicht wechseln, speichern oder den aktuell ausgewählten Lead veröffentlichen. Für select_lead immer lead_id angeben.",
     parameters: {
       type: "object",
       properties: {
@@ -171,12 +175,13 @@ async function executeTool(name: string, args: Record<string, any>, client: NonN
   }
 
   if (name === "studio_action") {
-    const action = args.action as ClientAction extends { type: "studio"; action: infer A } ? A : never;
-    if (!["select_lead", "master", "save", "publish", "mode"].includes(String(action))) return { text: "Unbekannte Studio-Aktion." };
-    const clientAction: ClientAction = { type: "studio", action } as ClientAction;
-    if ("leadId" in clientAction) clientAction.leadId = cleanString(args.lead_id, 80);
-    if ("mode" in clientAction && ["video", "landing", "brand", "versions", "render"].includes(args.mode)) clientAction.mode = args.mode;
-    return { text: `Studio-Aktion „${action}“ wird ausgeführt.`, action: clientAction };
+    const action = typeof args.action === "string" && STUDIO_ACTIONS.has(args.action as StudioActionName) ? args.action as StudioActionName : null;
+    if (!action) return { text: "Unbekannte Studio-Aktion." };
+    const leadId = cleanString(args.lead_id, 80);
+    const mode = typeof args.mode === "string" && STUDIO_MODES.has(args.mode as StudioMode) ? args.mode as StudioMode : undefined;
+    if (action === "select_lead" && !leadId) return { text: "Zum Öffnen eines Leads fehlt die Lead-ID." };
+    if (action === "mode" && !mode) return { text: "Zum Wechseln der Studio-Ansicht fehlt die gewünschte Ansicht." };
+    return { text: `Studio-Aktion „${action}“ wird ausgeführt.`, action: { type: "studio", action, leadId, mode } };
   }
 
   if (name === "update_lead") {
@@ -262,11 +267,11 @@ export async function POST(request: Request) {
   const message = cleanString(body.message, 5000);
   if (!message) return NextResponse.json({ error: "Bitte eine Frage oder Anweisung eingeben." }, { status: 400 });
 
-  const history = compact(body.history).slice(-10).filter((item): item is ChatMessage => !!item && (item.role === "user" || item.role === "assistant") && typeof item.content === "string").map((item) => ({ role: item.role, content: item.content.slice(0, 3000) }));
+  const history = compact<ChatMessage>(body.history).slice(-10).filter((item): item is ChatMessage => !!item && (item.role === "user" || item.role === "assistant") && typeof item.content === "string").map((item) => ({ role: item.role, content: item.content.slice(0, 3000) }));
   const context = await loadContext(client, user.id);
   const currentPath = cleanString(body.path, 400) || "/dashboard";
 
-  const instructions = `Du bist der Walkenhorst KI-Assistent innerhalb des Energy Sales OS. Antworte auf Deutsch, extrem klar und handlungsorientiert. Du kennst Leads, Kampagnen, Mailboxen, Follow-ups und veröffentlichte Video-Seiten aus dem mitgelieferten Kontext. Wenn der Nutzer eine Änderung verlangt, nutze ein passendes Tool statt nur zu erklären. Für Navigation und Studio-Steuerung ebenfalls Tools nutzen. Ändere niemals Mailbox-Passwörter, API-Keys oder andere Secrets. Lösche keine Datensätze. Bei unklaren riskanten Änderungen frage nach, bei normalen Änderungen handle direkt. Aktueller Bereich: ${currentPath}. Systemkontext: ${JSON.stringify(context)}.`;
+  const instructions = `Du bist der Walkenhorst KI-Assistent innerhalb des Energy Sales OS. Antworte auf Deutsch, extrem klar und handlungsorientiert. Du kennst Leads, Kampagnen, Mailboxen, Follow-ups und veröffentlichte Video-Seiten aus dem mitgelieferten Kontext. Wenn der Nutzer eine Änderung verlangt, nutze ein passendes Tool statt nur zu erklären. Für Navigation und Studio-Steuerung ebenfalls Tools nutzen. Ändere niemals Mailbox-Passwörter, API-Keys oder andere Secrets. Lösche keine Datensätze. Wenn eine Aktion mehrere Schritte braucht, führe nur Schritte aus, die mit den vorhandenen Tools sicher möglich sind, und sage knapp, was erledigt wurde. Bei unklaren riskanten Änderungen frage nach, bei normalen Änderungen handle direkt. Aktueller Bereich: ${currentPath}. Systemkontext: ${JSON.stringify(context)}.`;
 
   const aiResponse = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -285,7 +290,7 @@ export async function POST(request: Request) {
   const responseData = await aiResponse.json();
   if (!aiResponse.ok) return NextResponse.json({ error: responseData?.error?.message || "KI-Anfrage fehlgeschlagen." }, { status: 502 });
 
-  const calls = compact(responseData?.output).filter((item: any) => item?.type === "function_call");
+  const calls = compact<any>(responseData?.output).filter((item: any) => item?.type === "function_call");
   if (!calls.length) return NextResponse.json({ message: responseText(responseData) || "Ich habe dazu gerade keine verwertbare Antwort erzeugt.", actions: [] });
 
   const results: string[] = [];
