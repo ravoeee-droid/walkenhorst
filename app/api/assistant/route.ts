@@ -259,8 +259,11 @@ export async function POST(request: Request) {
   const client = studioApiClient(request);
   if (!user || !client) return NextResponse.json({ error: "Nicht autorisiert." }, { status: 401 });
 
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return NextResponse.json({ error: "OPENAI_API_KEY fehlt in den Vercel Environment Variables." }, { status: 503 });
+  const gatewayToken = process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_OIDC_TOKEN;
+  const openAiKey = process.env.OPENAI_API_KEY;
+  const useGateway = Boolean(gatewayToken);
+  const token = gatewayToken || openAiKey;
+  if (!token) return NextResponse.json({ error: "KI-Zugang fehlt. Auf Vercel wird VERCEL_OIDC_TOKEN automatisch genutzt; lokal AI_GATEWAY_API_KEY oder OPENAI_API_KEY setzen." }, { status: 503 });
 
   let body: { message?: string; path?: string; history?: ChatMessage[] } = {};
   try { body = await request.json(); } catch { return NextResponse.json({ error: "Ungültige Anfrage." }, { status: 400 }); }
@@ -273,11 +276,11 @@ export async function POST(request: Request) {
 
   const instructions = `Du bist der Walkenhorst KI-Assistent innerhalb des Energy Sales OS. Antworte auf Deutsch, extrem klar und handlungsorientiert. Du kennst Leads, Kampagnen, Mailboxen, Follow-ups und veröffentlichte Video-Seiten aus dem mitgelieferten Kontext. Wenn der Nutzer eine Änderung verlangt, nutze ein passendes Tool statt nur zu erklären. Für Navigation und Studio-Steuerung ebenfalls Tools nutzen. Ändere niemals Mailbox-Passwörter, API-Keys oder andere Secrets. Lösche keine Datensätze. Wenn eine Aktion mehrere Schritte braucht, führe nur Schritte aus, die mit den vorhandenen Tools sicher möglich sind, und sage knapp, was erledigt wurde. Bei unklaren riskanten Änderungen frage nach, bei normalen Änderungen handle direkt. Aktueller Bereich: ${currentPath}. Systemkontext: ${JSON.stringify(context)}.`;
 
-  const aiResponse = await fetch("https://api.openai.com/v1/responses", {
+  const aiResponse = await fetch(useGateway ? "https://ai-gateway.vercel.sh/v1/responses" : "https://api.openai.com/v1/responses", {
     method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: process.env.OPENAI_MODEL || "gpt-5",
+      model: process.env.OPENAI_MODEL || (useGateway ? "openai/gpt-5.4" : "gpt-5.4"),
       store: false,
       instructions,
       input: [...history, { role: "user", content: message }],
