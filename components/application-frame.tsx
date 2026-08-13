@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
 import type { User } from "@supabase/supabase-js";
 import { AuthGate } from "@/components/auth-gate";
@@ -24,7 +24,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Arbeitsbereich",
     items: [
       { label: "Übersicht", href: "/dashboard?section=overview", section: "overview", icon: "⌂" },
-      { label: "Lead Radar", href: "/dashboard?section=finder", section: "finder", icon: "⌕" },
+      { label: "Lead Finder", href: "/dashboard?section=finder", section: "finder", icon: "⌕" },
       { label: "Leads", href: "/dashboard?section=leads", section: "leads", icon: "◎" },
       { label: "Heute", href: "/command", icon: "⚡" },
     ],
@@ -77,6 +77,16 @@ const NAV_GROUPS: NavGroup[] = [
 
 const PUBLIC_PREFIXES = ["/v/", "/offer/", "/u/"];
 const DASHBOARD_PATHS = new Set(["/", "/dashboard"]);
+const SECTION_LABELS: Record<string, string> = {
+  overview: "Übersicht",
+  finder: "Lead Finder",
+  leads: "Leads",
+  inbox: "Inbox",
+  followups: "Follow-ups",
+  templates: "Vorlagen",
+  audit: "Website Analyse",
+  seo: "SEO Radar",
+};
 
 function initials(user: User) {
   const value = user.user_metadata?.full_name || user.email || "Walkenhorst";
@@ -89,6 +99,14 @@ function currentSectionFromLocation() {
   return new URLSearchParams(window.location.search).get("section") || "overview";
 }
 
+function clickLegacySection(section: string) {
+  const label = SECTION_LABELS[section];
+  if (!label) return;
+  const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>(".os-sidebar .os-navbtn"));
+  const button = buttons.find((candidate) => (candidate.textContent || "").replace(/\s+/g, " ").trim().includes(label));
+  button?.click();
+}
+
 function DashboardFrame({ user, children }: { user: User; children: ReactNode }) {
   const pathname = usePathname();
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
@@ -97,12 +115,19 @@ function DashboardFrame({ user, children }: { user: User; children: ReactNode })
   const [dashboardSection, setDashboardSection] = useState("overview");
 
   useEffect(() => {
-    setDashboardSection(currentSectionFromLocation());
+    const initial = currentSectionFromLocation();
+    setDashboardSection(initial);
+    if (DASHBOARD_PATHS.has(window.location.pathname)) window.setTimeout(() => clickLegacySection(initial), 0);
+
     const handleNavigation = (event: Event) => {
       const custom = event as CustomEvent<string>;
       setDashboardSection(custom.detail || currentSectionFromLocation());
     };
-    const handlePopState = () => setDashboardSection(currentSectionFromLocation());
+    const handlePopState = () => {
+      const section = currentSectionFromLocation();
+      setDashboardSection(section);
+      if (DASHBOARD_PATHS.has(window.location.pathname)) window.setTimeout(() => clickLegacySection(section), 0);
+    };
     window.addEventListener("walkenhorst:section", handleNavigation);
     window.addEventListener("popstate", handlePopState);
     return () => {
@@ -113,7 +138,9 @@ function DashboardFrame({ user, children }: { user: User; children: ReactNode })
 
   useEffect(() => {
     setMobileOpen(false);
-    setDashboardSection(currentSectionFromLocation());
+    const section = currentSectionFromLocation();
+    setDashboardSection(section);
+    if (DASHBOARD_PATHS.has(pathname)) window.setTimeout(() => clickLegacySection(section), 0);
   }, [pathname]);
 
   useEffect(() => {
@@ -132,6 +159,18 @@ function DashboardFrame({ user, children }: { user: User; children: ReactNode })
   function isActive(item: NavItem) {
     if (item.section) return DASHBOARD_PATHS.has(pathname) && dashboardSection === item.section;
     return pathname === item.href || (item.href !== "/" && pathname.startsWith(`${item.href}/`));
+  }
+
+  function openSection(event: MouseEvent<HTMLAnchorElement>, item: NavItem) {
+    if (!item.section) return;
+    setDashboardSection(item.section);
+    setMobileOpen(false);
+    if (!DASHBOARD_PATHS.has(pathname)) return;
+    event.preventDefault();
+    const next = `/dashboard?section=${encodeURIComponent(item.section)}`;
+    window.history.pushState(window.history.state, "", next);
+    clickLegacySection(item.section);
+    window.dispatchEvent(new CustomEvent("walkenhorst:section", { detail: item.section }));
   }
 
   async function signOut() {
@@ -163,7 +202,7 @@ function DashboardFrame({ user, children }: { user: User; children: ReactNode })
                   className={`wh-nav-item ${isActive(item) ? "is-active" : ""}`}
                   href={item.href}
                   title={collapsed ? item.label : undefined}
-                  onClick={() => item.section && setDashboardSection(item.section)}
+                  onClick={(event) => openSection(event, item)}
                 >
                   <span className="wh-nav-icon" aria-hidden="true">{item.icon}</span>
                   <span className="wh-nav-text">{item.label}</span>
