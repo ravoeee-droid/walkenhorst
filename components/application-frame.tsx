@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "r
 import { usePathname } from "next/navigation";
 import type { User } from "@supabase/supabase-js";
 import { AuthGate } from "@/components/auth-gate";
+import { FloatingAiAssistant } from "@/components/floating-ai-assistant";
 import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
 
 type NavItem = {
@@ -231,6 +232,7 @@ function DashboardFrame({ user, children }: { user: User; children: ReactNode })
         </header>
         <div className="wh-app-content">{children}</div>
       </section>
+      <FloatingAiAssistant user={user} />
     </div>
   );
 }
