@@ -1,9 +1,7 @@
 "use client";
 
 import { AuthGate } from "@/components/auth-gate";
-import { EnergyVideoStudio } from "@/components/energy-video-studio";
 import { StudioUploadProgress } from "@/components/studio-upload-progress";
+import { StudioV3Editor } from "@/components/studio-v3/studio-v3-editor";
 
-export default function StudioPage(){
-  return <><AuthGate>{user=><EnergyVideoStudio user={user}/>}</AuthGate><StudioUploadProgress/></>;
-}
+export default function StudioPage(){return <><AuthGate>{user=><StudioV3Editor user={user}/>}</AuthGate><StudioUploadProgress/></>}

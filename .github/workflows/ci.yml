@@ -2,7 +2,7 @@ name: Walkenhorst CI
 
 on:
   push:
-    branches: [main, feature/production-outbound-v1, feature/studio-v2]
+    branches: [main, feature/production-outbound-v1, feature/studio-v2, feature/studio-v3]
 
 permissions:
   contents: read
@@ -12,8 +12,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       - id: install
