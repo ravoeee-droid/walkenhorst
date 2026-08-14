@@ -1,12 +1,13 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { asWorkspaceUser } from "../_shared/workspace.ts";
 
 const H={"content-type":"application/json","cache-control":"no-store","access-control-allow-origin":"*","access-control-allow-headers":"authorization, content-type"};
 const out=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:H});
 const PROVIDERS=new Set(["google_maps","google_maps_static","firecrawl","reacher","chatwoot","activepieces","papermark","dub","openreplay","typebot","twenty","warmbly","denshees","rinkel"]);
 function env(){const url=Deno.env.get("SUPABASE_URL")||"";const pubs=Deno.env.get("SUPABASE_PUBLISHABLE_KEYS");const secs=Deno.env.get("SUPABASE_SECRET_KEYS");const publicKey=pubs?JSON.parse(pubs)?.default:Deno.env.get("SUPABASE_ANON_KEY");const secretKey=secs?JSON.parse(secs)?.default:Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");if(!url||!publicKey||!secretKey)throw new Error("Backend configuration missing");return{url,publicKey,secretKey}}
 function admin(){const e=env();return createClient(e.url,e.secretKey,{auth:{persistSession:false,autoRefreshToken:false}})}
-async function user(req:Request){const token=(req.headers.get("authorization")||"").replace(/^Bearer\s+/i,"").trim();if(!token)return null;const e=env();const c=createClient(e.url,e.publicKey,{auth:{persistSession:false,autoRefreshToken:false}});const{data,error}=await c.auth.getUser(token);return error?null:data.user}
+async function user(req:Request){const token=(req.headers.get("authorization")||"").replace(/^Bearer\s+/i,"").trim();if(!token)return null;const e=env();const c=createClient(e.url,e.publicKey,{auth:{persistSession:false,autoRefreshToken:false}});const{data,error}=await c.auth.getUser(token);return error?null:asWorkspaceUser(data.user)}
 function cleanUrl(v:unknown){const raw=String(v||"").trim();if(!raw)return null;const u=new URL(/^https?:\/\//i.test(raw)?raw:`https://${raw}`);if(!["http:","https:"].includes(u.protocol)||u.username||u.password)throw new Error("Ungültige Integration-URL");return u.toString().replace(/\/$/,"")}
 function headersFor(secret:string,config:any){const h:Record<string,string>={"content-type":"application/json","user-agent":"Walkenhorst-Energy-Radar/1.0"};if(secret){const name=String(config?.auth_header||"Authorization");const scheme=String(config?.auth_scheme??"Bearer");h[name]=scheme?`${scheme} ${secret}`:secret}return h}
 async function fetchTimeout(url:string,init:RequestInit={},ms=12000){const c=new AbortController();const t=setTimeout(()=>c.abort(),ms);try{return await fetch(url,{...init,signal:c.signal})}finally{clearTimeout(t)}}
