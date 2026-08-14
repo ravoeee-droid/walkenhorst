@@ -6,6 +6,7 @@ import type { User } from "@supabase/supabase-js";
 import { AuthGate } from "@/components/auth-gate";
 import { FloatingAiAssistant } from "@/components/floating-ai-assistant";
 import { LeadRowOpenBridge } from "@/components/lead-row-open-bridge";
+import { StudioLivePageBridge } from "@/components/studio-live-page-bridge";
 import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
 
 type NavItem = {
@@ -237,6 +238,7 @@ function DashboardFrame({ user, children }: { user: User; children: ReactNode })
         <div className="wh-app-content">{children}</div>
       </section>
       <LeadRowOpenBridge user={user} />
+      <StudioLivePageBridge user={user} />
       <FloatingAiAssistant user={user} />
     </div>
   );
