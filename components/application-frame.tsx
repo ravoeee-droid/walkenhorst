@@ -7,6 +7,7 @@ import type { User } from "@supabase/supabase-js";
 import { AuthGate } from "@/components/auth-gate";
 import { FloatingAiAssistant } from "@/components/floating-ai-assistant";
 import { LeadRowOpenBridge } from "@/components/lead-row-open-bridge";
+import { NavigationProgress } from "@/components/navigation-progress";
 import { StudioLivePageBridge } from "@/components/studio-live-page-bridge";
 import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
 
@@ -185,6 +186,7 @@ function DashboardFrame({ user, children }: { user: User; children: ReactNode })
 
   return (
     <div className={`wh-app-frame ${collapsed ? "is-collapsed" : ""}`}>
+      <NavigationProgress />
       <div className={`wh-sidebar-backdrop ${mobileOpen ? "is-open" : ""}`} onClick={() => setMobileOpen(false)} />
       <aside className={`wh-app-sidebar ${mobileOpen ? "is-mobile-open" : ""}`}>
         <div className="wh-sidebar-brand">
