@@ -2,7 +2,7 @@ name: Walkenhorst CI
 
 on:
   push:
-    branches: [main, feature/production-outbound-v1, feature/studio-v2, feature/studio-v3, feature/unified-apple-dashboard]
+    branches: [main, "feature/**"]
 
 permissions:
   contents: read

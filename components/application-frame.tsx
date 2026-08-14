@@ -4,6 +4,9 @@ import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "r
 import { usePathname } from "next/navigation";
 import type { User } from "@supabase/supabase-js";
 import { AuthGate } from "@/components/auth-gate";
+import { FloatingAiAssistant } from "@/components/floating-ai-assistant";
+import { LeadRowOpenBridge } from "@/components/lead-row-open-bridge";
+import { StudioLivePageBridge } from "@/components/studio-live-page-bridge";
 import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
 
 type NavItem = {
@@ -157,7 +160,10 @@ function DashboardFrame({ user, children }: { user: User; children: ReactNode })
   }
 
   function isActive(item: NavItem) {
-    if (item.section) return DASHBOARD_PATHS.has(pathname) && dashboardSection === item.section;
+    if (item.section) {
+      if (item.section === "leads" && pathname.startsWith("/leads/")) return true;
+      return DASHBOARD_PATHS.has(pathname) && dashboardSection === item.section;
+    }
     return pathname === item.href || (item.href !== "/" && pathname.startsWith(`${item.href}/`));
   }
 
@@ -231,6 +237,9 @@ function DashboardFrame({ user, children }: { user: User; children: ReactNode })
         </header>
         <div className="wh-app-content">{children}</div>
       </section>
+      <LeadRowOpenBridge user={user} />
+      <StudioLivePageBridge user={user} />
+      <FloatingAiAssistant user={user} />
     </div>
   );
 }
