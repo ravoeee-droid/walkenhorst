@@ -45,6 +45,22 @@ function readableAuthError(message: string) {
   return message;
 }
 
+function asWorkspaceUser(user: User | null | undefined): User | null {
+  if (!user) return null;
+  const owner = typeof user.app_metadata?.workspace_owner_id === "string"
+    ? user.app_metadata.workspace_owner_id.trim()
+    : "";
+  if (!owner || owner === user.id) return user;
+  return {
+    ...user,
+    id: owner,
+    app_metadata: {
+      ...user.app_metadata,
+      login_user_id: user.id,
+    },
+  } as User;
+}
+
 export function AuthGate({ children }: { children: (user: User) => React.ReactNode }) {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const [user, setUser] = useState<User | null>(null);
@@ -77,13 +93,14 @@ export function AuthGate({ children }: { children: (user: User) => React.ReactNo
       }
     }
 
-    void supabase.auth.getSession().then(({ data }) => {
-      setUser(data.session?.user ?? null);
+    void supabase.auth.getUser().then(({ data, error: userError }) => {
+      if (userError) setUser(null);
+      else setUser(asWorkspaceUser(data.user));
       setLoading(false);
     });
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
+      setUser(asWorkspaceUser(session?.user));
       setLoading(false);
     });
 
@@ -121,7 +138,7 @@ export function AuthGate({ children }: { children: (user: User) => React.ReactNo
         setError("Es wurde keine gültige Login-Session erstellt. Bitte erneut anmelden.");
         return;
       }
-      setUser(result.data.session.user);
+      setUser(asWorkspaceUser(result.data.session.user));
       return;
     }
 
@@ -147,7 +164,7 @@ export function AuthGate({ children }: { children: (user: User) => React.ReactNo
     }
 
     if (result.data.session) {
-      setUser(result.data.session.user);
+      setUser(asWorkspaceUser(result.data.session.user));
       return;
     }
 
