@@ -8,6 +8,7 @@ import { AuthGate } from "@/components/auth-gate";
 import { AppUserProvider } from "@/components/app-user-context";
 import { FloatingAiAssistant } from "@/components/floating-ai-assistant";
 import { LeadRowOpenBridge } from "@/components/lead-row-open-bridge";
+import { LoginPersonalizationBridge } from "@/components/login-personalization-bridge";
 import { NavigationProgress } from "@/components/navigation-progress";
 import { StudioLivePageBridge } from "@/components/studio-live-page-bridge";
 import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
@@ -101,7 +102,7 @@ function DashboardFrame({ user, children }: { user: User; children: ReactNode })
   async function signOut() { if (supabase) await supabase.auth.signOut(); window.location.assign("/dashboard"); }
 
   return <AppUserProvider user={user}><div className={`wh-app-frame ${collapsed ? "is-collapsed" : ""}`}>
-    <NavigationProgress />
+    <NavigationProgress /><LoginPersonalizationBridge user={user} />
     <div className={`wh-sidebar-backdrop ${mobileOpen ? "is-open" : ""}`} onClick={() => setMobileOpen(false)} />
     <aside className={`wh-app-sidebar ${mobileOpen ? "is-mobile-open" : ""}`}>
       <div className="wh-sidebar-brand">
