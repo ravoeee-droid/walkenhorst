@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
 import type { User } from "@supabase/supabase-js";
@@ -28,7 +29,8 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Übersicht", href: "/dashboard?section=overview", section: "overview", icon: "⌂" },
       { label: "Lead Finder", href: "/dashboard?section=finder", section: "finder", icon: "⌕" },
-      { label: "Leads", href: "/dashboard?section=leads", section: "leads", icon: "◎" },
+      { label: "Gewerbe CRM", href: "/crm/commercial", icon: "▦", badge: "B2B" },
+      { label: "Privatkunden CRM", href: "/crm/private", icon: "◎", badge: "B2C" },
       { label: "Heute", href: "/command", icon: "⚡" },
     ],
   },
@@ -160,17 +162,14 @@ function DashboardFrame({ user, children }: { user: User; children: ReactNode })
   }
 
   function isActive(item: NavItem) {
-    if (item.section) {
-      if (item.section === "leads" && pathname.startsWith("/leads/")) return true;
-      return DASHBOARD_PATHS.has(pathname) && dashboardSection === item.section;
-    }
+    if (item.section) return DASHBOARD_PATHS.has(pathname) && dashboardSection === item.section;
     return pathname === item.href || (item.href !== "/" && pathname.startsWith(`${item.href}/`));
   }
 
   function openSection(event: MouseEvent<HTMLAnchorElement>, item: NavItem) {
+    setMobileOpen(false);
     if (!item.section) return;
     setDashboardSection(item.section);
-    setMobileOpen(false);
     if (!DASHBOARD_PATHS.has(pathname)) return;
     event.preventDefault();
     const next = `/dashboard?section=${encodeURIComponent(item.section)}`;
@@ -189,10 +188,10 @@ function DashboardFrame({ user, children }: { user: User; children: ReactNode })
       <div className={`wh-sidebar-backdrop ${mobileOpen ? "is-open" : ""}`} onClick={() => setMobileOpen(false)} />
       <aside className={`wh-app-sidebar ${mobileOpen ? "is-mobile-open" : ""}`}>
         <div className="wh-sidebar-brand">
-          <a className="wh-brand-lockup" href="/dashboard?section=overview" aria-label="Walkenhorst Übersicht">
+          <Link className="wh-brand-lockup" href="/dashboard?section=overview" aria-label="Walkenhorst Übersicht">
             <span className="wh-brand-mark">W</span>
             <span className="wh-brand-copy"><strong>Walkenhorst</strong><small>Energy Sales OS</small></span>
-          </a>
+          </Link>
           <button className="wh-collapse-button" type="button" onClick={toggleCollapsed} title={collapsed ? "Navigation ausklappen" : "Navigation einklappen"}>
             {collapsed ? "›" : "‹"}
           </button>
@@ -203,17 +202,18 @@ function DashboardFrame({ user, children }: { user: User; children: ReactNode })
             <div className="wh-nav-group" key={group.label}>
               <div className="wh-nav-label">{group.label}</div>
               {group.items.map((item) => (
-                <a
+                <Link
                   key={`${group.label}-${item.label}`}
                   className={`wh-nav-item ${isActive(item) ? "is-active" : ""}`}
                   href={item.href}
+                  prefetch
                   title={collapsed ? item.label : undefined}
                   onClick={(event) => openSection(event, item)}
                 >
                   <span className="wh-nav-icon" aria-hidden="true">{item.icon}</span>
                   <span className="wh-nav-text">{item.label}</span>
                   {item.badge ? <span className="wh-nav-badge">{item.badge}</span> : null}
-                </a>
+                </Link>
               ))}
             </div>
           ))}
@@ -232,8 +232,8 @@ function DashboardFrame({ user, children }: { user: User; children: ReactNode })
       <section className="wh-app-workspace">
         <header className="wh-mobile-bar">
           <button type="button" onClick={() => setMobileOpen(true)} aria-label="Navigation öffnen">☰</button>
-          <a href="/dashboard?section=overview"><span className="wh-mobile-mark">W</span><strong>Walkenhorst</strong></a>
-          <a className="wh-mobile-studio" href="/studio">Studio V3</a>
+          <Link href="/dashboard?section=overview"><span className="wh-mobile-mark">W</span><strong>Walkenhorst</strong></Link>
+          <Link className="wh-mobile-studio" href="/studio" prefetch>Studio V3</Link>
         </header>
         <div className="wh-app-content">{children}</div>
       </section>
