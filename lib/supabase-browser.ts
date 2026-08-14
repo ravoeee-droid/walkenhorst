@@ -16,12 +16,41 @@ export type EnergyMediaUploadProgress={
 
 function projectRefFromUrl(url:string){try{return new URL(url).hostname.split(".")[0]||""}catch{return""}}
 function emitUpload(detail:EnergyMediaUploadProgress){if(typeof window!=="undefined")window.dispatchEvent(new CustomEvent<EnergyMediaUploadProgress>(ENERGY_MEDIA_UPLOAD_EVENT,{detail}))}
+function workspaceUser<T extends {id:string;app_metadata?:Record<string,unknown>}|null|undefined>(user:T):T{
+  if(!user)return user;
+  const owner=typeof user.app_metadata?.workspace_owner_id==="string"?user.app_metadata.workspace_owner_id.trim():"";
+  if(!owner||owner===user.id)return user;
+  return{...user,id:owner,app_metadata:{...(user.app_metadata||{}),login_user_id:user.id}} as T;
+}
+function workspaceSession<T extends {user:any}|null|undefined>(session:T):T{return session?{...session,user:workspaceUser(session.user)} as T:session}
 
 export function createSupabaseBrowserClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
   if (!url || !key) return null;
   const client=createBrowserClient(url,key);
+
+  // Every UI surface sees the shared workspace owner as user.id while the JWT remains the
+  // real login identity. Display name/email stay personal; RLS validates membership.
+  const originalGetUser=client.auth.getUser.bind(client.auth);
+  const originalGetSession=client.auth.getSession.bind(client.auth);
+  const originalOnAuthStateChange=client.auth.onAuthStateChange.bind(client.auth);
+  (client.auth as any).getUser=async(...args:any[])=>{
+    const result=await (originalGetUser as any)(...args);
+    return result?.data?{...result,data:{...result.data,user:workspaceUser(result.data.user)}}:result;
+  };
+  (client.auth as any).getSession=async()=>{
+    const result=await originalGetSession();
+    if(!result.data.session)return result;
+    let session=workspaceSession(result.data.session);
+    if(!result.data.session.user?.app_metadata?.workspace_owner_id){
+      const fresh=await originalGetUser().catch(()=>null);
+      if(fresh?.data?.user)session={...result.data.session,user:workspaceUser(fresh.data.user)};
+    }
+    return{...result,data:{...result.data,session}};
+  };
+  (client.auth as any).onAuthStateChange=(callback:any)=>originalOnAuthStateChange((event,session)=>callback(event,workspaceSession(session)));
+
   const originalFrom=client.storage.from.bind(client.storage);
   (client.storage as any).from=(bucketId:string)=>{
     const bucket=originalFrom(bucketId);
