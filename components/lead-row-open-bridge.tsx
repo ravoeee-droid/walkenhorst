@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
+import { usePathname } from "next/navigation";
 import type { User } from "@supabase/supabase-js";
 import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
 
@@ -8,9 +9,10 @@ type LeadRef={id:string;company_name:string;contact_name:string|null;city:string
 
 export function LeadRowOpenBridge({ user }: { user: User }) {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+  const pathname = usePathname();
 
   useEffect(() => {
-    if (!supabase) return;
+    if (!supabase || (pathname !== "/" && pathname !== "/dashboard")) return;
     let disposed=false;
     let leads:LeadRef[]=[];
     let observer:MutationObserver|null=null;
@@ -44,12 +46,12 @@ export function LeadRowOpenBridge({ user }: { user: User }) {
       if(event.key!=="Enter"&&event.key!==" ")return;const target=event.target as HTMLElement|null;const row=target?.closest<HTMLTableRowElement>(".os-table tbody tr");if(!row?.dataset.leadId)return;event.preventDefault();event.stopPropagation();openRow(row);
     };
 
-    void supabase.from("energy_leads").select("id,company_name,contact_name,city,website,updated_at").eq("user_id",user.id).order("updated_at",{ascending:false}).limit(5000).then(result=>{
+    void supabase.from("energy_leads").select("id,company_name,contact_name,city,website,updated_at").eq("user_id",user.id).order("updated_at",{ascending:false}).limit(750).then(result=>{
       if(disposed||result.error)return;leads=(result.data||[]) as LeadRef[];decorate();observer=new MutationObserver(()=>window.requestAnimationFrame(decorate));observer.observe(document.body,{subtree:true,childList:true});
     });
     document.addEventListener("click",handleClick,true);document.addEventListener("keydown",handleKey,true);
     return()=>{disposed=true;observer?.disconnect();document.removeEventListener("click",handleClick,true);document.removeEventListener("keydown",handleKey,true)};
-  }, [supabase, user.id]);
+  }, [pathname, supabase, user.id]);
 
   return null;
 }
