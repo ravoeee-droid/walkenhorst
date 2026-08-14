@@ -1,8 +1,9 @@
 "use client";
 
-import { AuthGate } from "@/components/auth-gate";
+import { useAppUser } from "@/components/app-user-context";
 import { SalesOsDashboardV2 } from "@/components/sales-os-dashboard-v2";
 
 export function AppShell() {
-  return <AuthGate>{(user) => <SalesOsDashboardV2 user={user} />}</AuthGate>;
+  const user = useAppUser();
+  return <SalesOsDashboardV2 user={user} />;
 }
