@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
 import { scoreEnergyLead } from "@/lib/energy-score";
@@ -45,6 +45,8 @@ const STATUS_LABEL: Record<LeadStatus, string> = {
 };
 
 const STATUS_OPTIONS = Object.entries(STATUS_LABEL) as Array<[LeadStatus, string]>;
+const PAGE_SIZE = 40;
+const LEAD_FIELDS = "id,company_name,contact_name,email,phone,website,city,postcode,address,industry,status,customer_type,total_score,intent_score,next_action,next_action_at,do_not_contact,updated_at";
 
 function formatDate(value: string | null | undefined) {
   if (!value) return "—";
@@ -55,24 +57,52 @@ function formatDate(value: string | null | undefined) {
   }
 }
 
+function datetimeLocal(value: string | null | undefined) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+}
+
 function initials(value: string) {
   return value.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "WH";
+}
+
+function searchableLead(lead: Lead) {
+  return [
+    lead.company_name,
+    lead.contact_name,
+    lead.email,
+    lead.phone,
+    lead.website,
+    lead.city,
+    lead.postcode,
+    lead.address,
+    lead.industry,
+    lead.next_action,
+    STATUS_LABEL[lead.status],
+    lead.status,
+  ].filter(Boolean).join(" ").toLowerCase();
 }
 
 export function LeadCrm({ customerType }: { customerType: CustomerType }) {
   const router = useRouter();
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+  const searchRef = useRef<HTMLInputElement | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [rows, setRows] = useState<Lead[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
+  const deferredSearch = useDeferredValue(search);
   const [statusFilter, setStatusFilter] = useState<"all" | LeadStatus>("all");
+  const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [quickLeadId, setQuickLeadId] = useState<string | null>(null);
 
   const isCommercial = customerType === "commercial";
   const label = isCommercial ? "Gewerbekunden" : "Privatkunden";
@@ -88,7 +118,7 @@ export function LeadCrm({ customerType }: { customerType: CustomerType }) {
       setUserId(session.user.id);
       const result = await supabase
         .from("energy_leads")
-        .select("id,company_name,contact_name,email,phone,website,city,postcode,address,industry,status,customer_type,total_score,intent_score,next_action,next_action_at,do_not_contact,updated_at")
+        .select(LEAD_FIELDS)
         .eq("user_id", session.user.id)
         .eq("customer_type", customerType)
         .order("updated_at", { ascending: false })
@@ -96,6 +126,7 @@ export function LeadCrm({ customerType }: { customerType: CustomerType }) {
       if (result.error) throw result.error;
       setRows((result.data || []) as Lead[]);
       setSelected(new Set());
+      setPage(0);
     } catch (e) {
       setError(e instanceof Error ? e.message : "CRM konnte nicht geladen werden.");
     } finally {
@@ -104,23 +135,42 @@ export function LeadCrm({ customerType }: { customerType: CustomerType }) {
   }, [customerType, supabase]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { setPage(0); }, [deferredSearch, statusFilter]);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey && target?.tagName !== "INPUT" && target?.tagName !== "TEXTAREA" && target?.tagName !== "SELECT") {
+        event.preventDefault();
+        searchRef.current?.focus();
+      }
+      if (event.key === "Escape" && quickLeadId) setQuickLeadId(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [quickLeadId]);
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = deferredSearch.trim().toLowerCase();
     return rows.filter((lead) => {
       if (statusFilter !== "all" && lead.status !== statusFilter) return false;
-      if (!q) return true;
-      return [lead.company_name, lead.contact_name, lead.email, lead.phone, lead.city, lead.industry]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(q));
+      return !q || searchableLead(lead).includes(q);
     });
-  }, [rows, search, statusFilter]);
+  }, [rows, deferredSearch, statusFilter]);
 
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+  const visibleRows = useMemo(() => filtered.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE), [filtered, safePage]);
   const selectedRows = useMemo(() => rows.filter((lead) => selected.has(lead.id)), [rows, selected]);
-  const hot = rows.filter((lead) => lead.intent_score >= 70 || lead.status === "engaged" || lead.status === "qualified").length;
-  const contactable = rows.filter((lead) => !lead.do_not_contact && (lead.email || lead.phone)).length;
-  const actionDue = rows.filter((lead) => lead.next_action_at && new Date(lead.next_action_at).getTime() <= Date.now()).length;
-  const allVisibleSelected = filtered.length > 0 && filtered.every((lead) => selected.has(lead.id));
+  const quickLead = useMemo(() => rows.find((lead) => lead.id === quickLeadId) || null, [rows, quickLeadId]);
+  const metrics = useMemo(() => rows.reduce((acc, lead) => {
+    acc.contactable += !lead.do_not_contact && Boolean(lead.email || lead.phone) ? 1 : 0;
+    acc.hot += lead.intent_score >= 70 || lead.status === "engaged" || lead.status === "qualified" ? 1 : 0;
+    acc.actionDue += lead.next_action_at && new Date(lead.next_action_at).getTime() <= Date.now() ? 1 : 0;
+    return acc;
+  }, { contactable: 0, hot: 0, actionDue: 0 }), [rows]);
+  const allVisibleSelected = visibleRows.length > 0 && visibleRows.every((lead) => selected.has(lead.id));
+  const rangeStart = filtered.length ? safePage * PAGE_SIZE + 1 : 0;
+  const rangeEnd = Math.min(filtered.length, safePage * PAGE_SIZE + PAGE_SIZE);
 
   function toggle(id: string) {
     setSelected((current) => {
@@ -133,10 +183,42 @@ export function LeadCrm({ customerType }: { customerType: CustomerType }) {
   function toggleVisible() {
     setSelected((current) => {
       const next = new Set(current);
-      if (allVisibleSelected) filtered.forEach((lead) => next.delete(lead.id));
-      else filtered.forEach((lead) => next.add(lead.id));
+      if (allVisibleSelected) visibleRows.forEach((lead) => next.delete(lead.id));
+      else visibleRows.forEach((lead) => next.add(lead.id));
       return next;
     });
+  }
+
+  async function quickEdit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase || !userId || !quickLead) return;
+    const form = new FormData(event.currentTarget);
+    const nextAt = String(form.get("next_action_at") || "").trim();
+    const payload = {
+      contact_name: String(form.get("contact_name") || "").trim() || null,
+      email: String(form.get("email") || "").trim().toLowerCase() || null,
+      phone: String(form.get("phone") || "").trim() || null,
+      status: String(form.get("status") || quickLead.status) as LeadStatus,
+      next_action: String(form.get("next_action") || "").trim() || null,
+      next_action_at: nextAt ? new Date(nextAt).toISOString() : null,
+      industry: isCommercial ? (String(form.get("industry") || "").trim() || null) : quickLead.industry,
+      city: String(form.get("city") || "").trim() || null,
+      do_not_contact: String(form.get("do_not_contact") || "no") === "yes",
+      updated_at: new Date().toISOString(),
+    };
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      const result = await supabase.from("energy_leads").update(payload).eq("user_id", userId).eq("id", quickLead.id).select(LEAD_FIELDS).single();
+      if (result.error) throw result.error;
+      const updated = result.data as Lead;
+      setRows((current) => current.map((lead) => lead.id === updated.id ? updated : lead));
+      setNotice(`${updated.company_name} wurde aktualisiert.`);
+      setQuickLeadId(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Schnellbearbeitung fehlgeschlagen.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function bulkEdit(event: FormEvent<HTMLFormElement>) {
@@ -262,11 +344,20 @@ export function LeadCrm({ customerType }: { customerType: CustomerType }) {
       <button className={styles.primary} type="button" onClick={() => setCreateOpen(true)}>+ {singular}</button>
     </header>
 
+    <section className={styles.commandSearch}>
+      <span className={styles.searchIcon}>⌕</span>
+      <div>
+        <strong>Alles durchsuchen</strong>
+        <input ref={searchRef} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Unternehmen, Name, E-Mail, Telefon, Ort, Branche, Website, nächste Aktion …" />
+      </div>
+      {search ? <button type="button" onClick={() => setSearch("")} aria-label="Suche leeren">×</button> : <kbd>/</kbd>}
+    </section>
+
     <section className={styles.kpis}>
       <div><span>Leads</span><strong>{rows.length}</strong><small>in diesem CRM</small></div>
-      <div><span>Kontaktierbar</span><strong>{contactable}</strong><small>E-Mail oder Telefon</small></div>
-      <div><span>Hot</span><strong>{hot}</strong><small>hoher Intent</small></div>
-      <div><span>Aktion fällig</span><strong>{actionDue}</strong><small>heute / überfällig</small></div>
+      <div><span>Kontaktierbar</span><strong>{metrics.contactable}</strong><small>E-Mail oder Telefon</small></div>
+      <div><span>Hot</span><strong>{metrics.hot}</strong><small>hoher Intent</small></div>
+      <div><span>Aktion fällig</span><strong>{metrics.actionDue}</strong><small>heute / überfällig</small></div>
     </section>
 
     {error ? <div className={styles.error}>{error}</div> : null}
@@ -274,13 +365,13 @@ export function LeadCrm({ customerType }: { customerType: CustomerType }) {
 
     <section className={styles.card}>
       <div className={styles.toolbar}>
-        <div className={styles.searchBox}><span>⌕</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={`${label} durchsuchen …`} /></div>
-        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "all" | LeadStatus)}>
+        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "all" | LeadStatus)} aria-label="Status filtern">
           <option value="all">Alle Status</option>
           {STATUS_OPTIONS.map(([value, name]) => <option value={value} key={value}>{name}</option>)}
         </select>
-        <div className={styles.toolbarSpacer}/>
         <span className={styles.resultCount}>{filtered.length} Ergebnisse</span>
+        <div className={styles.toolbarSpacer}/>
+        {deferredSearch !== search ? <span className={styles.searching}>Suche …</span> : <span className={styles.tableHint}>Lead anklicken für Schnellbearbeitung</span>}
       </div>
 
       {selected.size > 0 ? <div className={styles.bulkBar}>
@@ -294,9 +385,9 @@ export function LeadCrm({ customerType }: { customerType: CustomerType }) {
         <table className={styles.table}>
           <thead><tr>
             <th className={styles.checkCol}><input aria-label="Alle sichtbaren Leads auswählen" type="checkbox" checked={allVisibleSelected} onChange={toggleVisible}/></th>
-            <th>{isCommercial ? "Unternehmen" : "Kontakt"}</th><th>Kontakt</th><th>Status</th><th>Opportunity</th><th>Nächster Schritt</th><th>Aktualisiert</th><th/>
+            <th>{isCommercial ? "Unternehmen" : "Kontakt"}</th><th>Kontakt</th><th>Status</th><th>Opportunity</th><th>Nächster Schritt</th><th>Aktualisiert</th>
           </tr></thead>
-          <tbody>{filtered.map((lead) => <tr key={lead.id} onClick={() => router.push(`/leads/${lead.id}`)}>
+          <tbody>{visibleRows.map((lead) => <tr key={lead.id} onClick={() => setQuickLeadId(lead.id)} tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setQuickLeadId(lead.id); } }}>
             <td className={styles.checkCol} onClick={(e) => e.stopPropagation()}><input aria-label={`${lead.company_name} auswählen`} type="checkbox" checked={selected.has(lead.id)} onChange={() => toggle(lead.id)}/></td>
             <td><div className={styles.identity}><span>{initials(lead.company_name)}</span><div><strong>{lead.company_name}</strong><small>{[isCommercial ? lead.contact_name : lead.city, lead.industry].filter(Boolean).join(" · ") || "Noch nicht angereichert"}</small></div></div></td>
             <td><div className={styles.contact}><strong>{lead.email || lead.phone || "—"}</strong><small>{lead.email && lead.phone ? lead.phone : [lead.postcode, lead.city].filter(Boolean).join(" ")}</small></div></td>
@@ -304,15 +395,43 @@ export function LeadCrm({ customerType }: { customerType: CustomerType }) {
             <td><div className={styles.score}><strong>{lead.total_score}</strong><span>/ 100</span></div></td>
             <td><div className={styles.next}><strong>{lead.next_action || "Noch offen"}</strong><small>{formatDate(lead.next_action_at)}</small></div></td>
             <td><span className={styles.date}>{formatDate(lead.updated_at)}</span></td>
-            <td><button className={styles.openButton} type="button" onClick={(e) => { e.stopPropagation(); router.push(`/leads/${lead.id}`); }}>Öffnen →</button></td>
           </tr>)}</tbody>
         </table>
-        {!filtered.length ? <div className={styles.empty}><strong>Keine Leads gefunden.</strong><span>Passe Suche/Filter an oder lege einen neuen Lead an.</span></div> : null}
+        {!filtered.length ? <div className={styles.empty}><strong>Keine Leads gefunden.</strong><span>Passe Suche oder Filter an.</span></div> : null}
       </div>
+
+      {filtered.length > 0 ? <footer className={styles.pagination}>
+        <span>{rangeStart}–{rangeEnd} von {filtered.length}</span>
+        <div>
+          <button type="button" disabled={safePage === 0} onClick={() => setPage((value) => Math.max(0, value - 1))}>← Zurück</button>
+          <strong>{safePage + 1} / {pageCount}</strong>
+          <button type="button" disabled={safePage >= pageCount - 1} onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))}>Weiter →</button>
+        </div>
+      </footer> : null}
     </section>
 
+    {quickLead ? <div className={styles.modalBackdrop} onMouseDown={() => setQuickLeadId(null)}><section className={`${styles.modal} ${styles.quickModal}`} onMouseDown={(e) => e.stopPropagation()} key={quickLead.id}>
+      <div className={styles.quickHead}>
+        <div className={styles.quickIdentity}><span>{initials(quickLead.company_name)}</span><div><small>Schnellbearbeitung</small><h2>{quickLead.company_name}</h2><p>{[quickLead.contact_name, quickLead.industry, quickLead.city].filter(Boolean).join(" · ") || "Noch nicht angereichert"}</p></div></div>
+        <div className={styles.quickMeta}><span className={`${styles.status} ${styles[`status_${quickLead.status}`] || ""}`}>{STATUS_LABEL[quickLead.status]}</span><strong>{quickLead.total_score}<small>/100</small></strong><button type="button" onClick={() => setQuickLeadId(null)} aria-label="Schnellbearbeitung schließen">×</button></div>
+      </div>
+      <form onSubmit={quickEdit} className={styles.form}>
+        <div className={styles.formGrid}><label><span>Status</span><select name="status" defaultValue={quickLead.status}>{STATUS_OPTIONS.map(([value, name]) => <option value={value} key={value}>{name}</option>)}</select></label><label><span>Ansprechpartner</span><input name="contact_name" defaultValue={quickLead.contact_name || ""} /></label></div>
+        <div className={styles.formGrid}><label><span>E-Mail</span><input name="email" type="email" defaultValue={quickLead.email || ""} /></label><label><span>Telefon</span><input name="phone" defaultValue={quickLead.phone || ""} /></label></div>
+        <div className={styles.formGrid}><label><span>Nächster Schritt</span><input name="next_action" defaultValue={quickLead.next_action || ""} placeholder="z. B. Rückruf, Angebot senden" /></label><label><span>Fällig am</span><input name="next_action_at" type="datetime-local" defaultValue={datetimeLocal(quickLead.next_action_at)} /></label></div>
+        <div className={styles.formGrid}>{isCommercial ? <label><span>Branche</span><input name="industry" defaultValue={quickLead.industry || ""} /></label> : <label><span>Ort</span><input name="city" defaultValue={quickLead.city || ""} /></label>}<label><span>Kontakt</span><select name="do_not_contact" defaultValue={quickLead.do_not_contact ? "yes" : "no"}><option value="no">Kontakt erlaubt</option><option value="yes">Nicht kontaktieren</option></select></label></div>
+        {isCommercial ? <label className={styles.compactCity}><span>Ort</span><input name="city" defaultValue={quickLead.city || ""} /></label> : null}
+        <div className={styles.quickActions}>
+          <button type="button" onClick={() => router.push(`/leads/${quickLead.id}`)}>Lead vollständig öffnen</button>
+          <div className={styles.actionSpacer}/>
+          <button type="button" onClick={() => setQuickLeadId(null)}>Abbrechen</button>
+          <button className={styles.primary} disabled={busy}>{busy ? "Speichert …" : "Änderungen speichern"}</button>
+        </div>
+      </form>
+    </section></div> : null}
+
     {bulkOpen ? <div className={styles.modalBackdrop} onMouseDown={() => setBulkOpen(false)}><section className={styles.modal} onMouseDown={(e) => e.stopPropagation()}>
-      <div className={styles.modalHead}><div><span>Bulk Edit</span><h2>{selected.size} Leads bearbeiten</h2></div><button type="button" onClick={() => setBulkOpen(false)}>×</button></div>
+      <div className={styles.modalHead}><div><span>Bulk Edit</span><h2>{selectedRows.length} Leads bearbeiten</h2></div><button type="button" onClick={() => setBulkOpen(false)}>×</button></div>
       <form onSubmit={bulkEdit} className={styles.form}>
         <label><span>Status ändern</span><select name="status" defaultValue=""><option value="">Unverändert</option>{STATUS_OPTIONS.map(([value, name]) => <option value={value} key={value}>{name}</option>)}</select></label>
         <label><span>CRM verschieben</span><select name="customer_type" defaultValue=""><option value="">Unverändert</option><option value="commercial">Gewerbekunden-CRM</option><option value="private">Privatkunden-CRM</option></select></label>
