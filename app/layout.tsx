@@ -5,6 +5,7 @@ import "./outbound-ui.css";
 import "./sales-os.css";
 import "./apple-shell.css";
 import "./premium-glass.css";
+import "./studio-ux-polish.css";
 
 export const metadata: Metadata = {
   title: "Walkenhorst Energy Sales OS",
