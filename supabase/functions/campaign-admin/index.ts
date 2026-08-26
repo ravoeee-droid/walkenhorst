@@ -104,11 +104,26 @@ async function ownedCampaign(db: DB, id: string, userId: string) {
   return data;
 }
 
+function cleanedLeadFilter(campaign: any) {
+  const filter = { ...(campaign?.lead_filter || {}) } as Record<string, unknown>;
+  delete filter.mailboxes_paused_by_campaign;
+  return filter;
+}
+
+async function restoreCampaignMailboxes(db: DB, campaign: any, userId: string) {
+  const ids = Array.isArray(campaign?.lead_filter?.mailboxes_paused_by_campaign)
+    ? campaign.lead_filter.mailboxes_paused_by_campaign.map(String).filter(Boolean)
+    : [];
+  if (!ids.length) return;
+  const { error } = await db.from("energy_mailboxes").update({ status: "ready", updated_at: new Date().toISOString() }).eq("user_id", userId).eq("status", "paused").in("id", ids);
+  if (error) throw error;
+}
+
 async function campaignSnapshot(db: DB, campaign: any) {
   const [{ data: steps }, { data: members }, { data: messages }] = await Promise.all([
     db.from("energy_campaign_steps").select("*").eq("campaign_id", campaign.id).order("step_order"),
     db.from("energy_campaign_members").select("id,status,current_step,stopped_reason,reply_status").eq("campaign_id", campaign.id),
-    db.from("energy_messages").select("id,status,to_email,from_email,subject,sent_at,opened_at,clicked_at,replied_at,error,step_order,created_at,energy_leads(company_name)").eq("campaign_id", campaign.id).eq("direction", "outbound").order("created_at", { ascending: false }).limit(100),
+    db.from("energy_messages").select("id,status,to_email,from_email,subject,sent_at,opened_at,clicked_at,replied_at,error,step_order,created_at,energy_leads(company_name)").eq("campaign_id", campaign.id).eq("direction", "outbound").order("created_at", { ascending: false }).limit(1000),
   ]);
   const memberRows = members || [];
   const messageRows = messages || [];
@@ -228,8 +243,14 @@ async function kickWorker(db: DB, baseUrl: string | null) {
   }
 }
 
+async function pauseCampaign(db: DB, campaign: any, userId: string) {
+  await restoreCampaignMailboxes(db, campaign, userId);
+  const { error } = await db.from("energy_campaigns").update({ status: "paused", next_send_at: null, lead_filter: cleanedLeadFilter(campaign), updated_at: new Date().toISOString() }).eq("id", campaign.id).eq("user_id", userId);
+  if (error) throw error;
+}
+
 async function startCampaign(db: DB, userId: string, id: string, kick = true) {
-  const campaign = await ownedCampaign(db, id, userId);
+  let campaign = await ownedCampaign(db, id, userId);
   if (!campaign) throw new Error("Kampagne nicht gefunden");
   const [{ count: members }, { count: steps }] = await Promise.all([
     db.from("energy_campaign_members").select("id", { count: "exact", head: true }).eq("campaign_id", id),
@@ -239,19 +260,40 @@ async function startCampaign(db: DB, userId: string, id: string, kick = true) {
   if (!steps) throw new Error("Die Kampagne hat noch keine Sequenz");
   if (!/^https:\/\//i.test(String(campaign.tracking_base_url || ""))) throw new Error("Tracking-URL fehlt");
 
-  const selectedIds = Array.isArray(campaign.mailbox_ids) ? campaign.mailbox_ids : [];
-  let mailboxQuery: any = db.from("energy_mailboxes").select("id,email_address,status").eq("user_id", userId).eq("status", "ready");
-  if (selectedIds.length) mailboxQuery = mailboxQuery.in("id", selectedIds);
-  const { data: readyMailboxes, error: mailboxError } = await mailboxQuery;
-  if (mailboxError) throw mailboxError;
-  if (!readyMailboxes?.length) throw new Error("Keine ausgewählte Mailbox ist versandbereit. Erst SMTP-Passwort hinterlegen und testen.");
+  const { data: otherActive, error: activeError } = await db.from("energy_campaigns").select("*").eq("user_id", userId).eq("status", "active").neq("id", id);
+  if (activeError) throw activeError;
+  for (const other of otherActive || []) await pauseCampaign(db, other, userId);
 
-  // Safe mode: one active campaign per workspace keeps the 5-minute dispatcher predictable.
-  await db.from("energy_campaigns").update({ status: "paused", updated_at: new Date().toISOString() }).eq("user_id", userId).eq("status", "active").neq("id", id);
+  // Recover a stale mailbox lock if the campaign was interrupted without a clean pause.
+  await restoreCampaignMailboxes(db, campaign, userId);
+  campaign = { ...campaign, lead_filter: cleanedLeadFilter(campaign) };
+
+  const { data: allMailboxes, error: mailboxError } = await db.from("energy_mailboxes").select("id,email_address,status").eq("user_id", userId).order("created_at");
+  if (mailboxError) throw mailboxError;
+  const requestedIds = Array.isArray(campaign.mailbox_ids) ? campaign.mailbox_ids.map(String) : [];
+  const readyRows = (allMailboxes || []).filter((row: any) => row.status === "ready");
+  const effectiveSelectedIds = requestedIds.length ? requestedIds : readyRows.map((row: any) => row.id);
+  const readySelected = readyRows.filter((row: any) => effectiveSelectedIds.includes(row.id));
+  if (!readySelected.length) throw new Error("Keine ausgewählte Mailbox ist versandbereit. Erst SMTP-Passwort hinterlegen und testen.");
+
+  // campaign-worker selects from all mailboxes in status=ready. While this campaign is active,
+  // only the selected ready mailboxes remain ready. On pause/switch they are restored safely.
+  const pausedByCampaign = readyRows.filter((row: any) => !effectiveSelectedIds.includes(row.id)).map((row: any) => row.id);
+  if (pausedByCampaign.length) {
+    const { error } = await db.from("energy_mailboxes").update({ status: "paused", updated_at: new Date().toISOString() }).eq("user_id", userId).eq("status", "ready").in("id", pausedByCampaign);
+    if (error) throw error;
+  }
+
   const now = new Date().toISOString();
-  const patch: any = { status: "active", completed_at: null, next_send_at: now, updated_at: now };
+  const patch: any = {
+    status: "active",
+    completed_at: null,
+    next_send_at: now,
+    mailbox_ids: effectiveSelectedIds,
+    lead_filter: { ...cleanedLeadFilter(campaign), mailboxes_paused_by_campaign: pausedByCampaign },
+    updated_at: now,
+  };
   if (!campaign.started_at) patch.started_at = now;
-  if (!selectedIds.length) patch.mailbox_ids = readyMailboxes.map((row: any) => row.id);
   const { error } = await db.from("energy_campaigns").update(patch).eq("id", id).eq("user_id", userId);
   if (error) throw error;
   const worker = kick ? await kickWorker(db, String(campaign.tracking_base_url || "")) : null;
@@ -283,12 +325,12 @@ Deno.serve(async (req) => {
       return reply({ ok: true, worker: await kickWorker(db, String(campaign.tracking_base_url || "")) });
     }
     if (action === "pause") {
-      const { error } = await db.from("energy_campaigns").update({ status: "paused", next_send_at: null, updated_at: new Date().toISOString() }).eq("id", id).eq("user_id", user.id);
-      if (error) throw error;
+      await pauseCampaign(db, campaign, user.id);
       return reply({ ok: true });
     }
     if (action === "delete") {
       if (campaign.status === "active") return reply({ error: "Aktive Kampagne zuerst pausieren" }, 409);
+      await restoreCampaignMailboxes(db, campaign, user.id);
       const { error } = await db.from("energy_campaigns").delete().eq("id", id).eq("user_id", user.id);
       if (error) throw error;
       return reply({ ok: true });
