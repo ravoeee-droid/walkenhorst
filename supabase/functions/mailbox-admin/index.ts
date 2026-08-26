@@ -4,7 +4,7 @@ import nodemailer from "npm:nodemailer@7";
 import { ImapFlow } from "npm:imapflow@1";
 import { asWorkspaceUser } from "../_shared/workspace.ts";
 
-const headers = { "content-type": "application/json", "cache-control": "no-store", "access-control-allow-origin": "*", "access-control-allow-headers": "authorization, content-type" };
+const headers = { "content-type": "application/json", "cache-control": "no-store", "access-control-allow-origin": "*", "access-control-allow-headers": "authorization, x-client-info, apikey, content-type" };
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers });
 function envKeys() {const url=Deno.env.get("SUPABASE_URL")!;const publishableSet=Deno.env.get("SUPABASE_PUBLISHABLE_KEYS");const secretSet=Deno.env.get("SUPABASE_SECRET_KEYS");const publicKey=publishableSet?JSON.parse(publishableSet)?.default:Deno.env.get("SUPABASE_ANON_KEY");const secretKey=secretSet?JSON.parse(secretSet)?.default:Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");if(!url||!publicKey||!secretKey)throw new Error("Backend configuration missing");return{url,publicKey,secretKey}}
 async function userFromRequest(req:Request){const authorization=req.headers.get("authorization")||"";const token=authorization.toLowerCase().startsWith("bearer ")?authorization.slice(7).trim():"";if(!token)return null;const{url,publicKey}=envKeys();const scoped=createClient(url,publicKey,{auth:{persistSession:false,autoRefreshToken:false}});const{data,error}=await scoped.auth.getUser(token);if(error||!data.user)return null;return asWorkspaceUser(data.user)}
