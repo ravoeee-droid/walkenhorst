@@ -1,0 +1,19 @@
+{
+  "instanceId": "CLIENT-WALKENHORST",
+  "company": "Walkenhorst Energie",
+  "environment": "production",
+  "github": "ravoeee-droid/walkenhorst",
+  "vercel": {
+    "project": "walkenhorst",
+    "projectId": "prj_x3nLVnqgVpKxJowHUjaN3iMswr9a"
+  },
+  "supabase": {
+    "project": "walkenhorst-energy-radar",
+    "projectRef": "jiahshldcusphxtbqxpv"
+  },
+  "forbiddenCrossInstanceRefs": [
+    "digitalegewinner-outbound",
+    "prj_4dgtSJI6FeoUezuUW13PNCFACvyL",
+    "dessavbytgxyygeohjrn"
+  ]
+}
