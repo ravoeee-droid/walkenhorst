@@ -5,6 +5,7 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test",
+    "qa:video:assets": "node qa/webmotion/assert-assets.mjs",
     "qa:video:lint": "webmotion lint qa/webmotion/scene.js",
     "qa:video:shoot": "webmotion shoot qa/webmotion/scene.js --out .webmotion/shots --frames auto"
   },
