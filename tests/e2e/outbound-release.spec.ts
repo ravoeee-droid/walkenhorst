@@ -4,6 +4,29 @@ const SUPABASE = "https://qa.supabase.invalid";
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const LEAD_ID = "22222222-2222-4222-8222-222222222222";
 const PAGE_ID = "33333333-3333-4333-8333-333333333333";
+const QA_EMAIL = "qa@walkenhorst.test";
+const QA_PASSWORD = "walkenhorst-qa-password";
+
+const authUser = {
+  id: USER_ID,
+  aud: "authenticated",
+  role: "authenticated",
+  email: QA_EMAIL,
+  app_metadata: { provider: "email", providers: ["email"], workspace_owner_id: USER_ID },
+  user_metadata: { full_name: "QA Walkenhorst" },
+  identities: [],
+  created_at: "2026-08-27T09:00:00.000Z",
+  updated_at: "2026-08-27T09:00:00.000Z",
+};
+
+const authSession = {
+  access_token: "qa-access-token",
+  refresh_token: "qa-refresh-token",
+  expires_in: 3600,
+  expires_at: 1787832000,
+  token_type: "bearer",
+  user: authUser,
+};
 
 const lead = {
   id: LEAD_ID,
@@ -93,35 +116,15 @@ type MockState = {
   gates?: { checks: Array<{ key: string; label: string; ok: boolean }>; allPassed: boolean; sendPassed: boolean };
 };
 
-async function installSession(page: Page) {
-  await page.addInitScript(({ userId }) => {
-    const session = {
-      access_token: "qa-access-token",
-      refresh_token: "qa-refresh-token",
-      expires_in: 3600,
-      expires_at: Math.floor(Date.now() / 1000) + 3600,
-      token_type: "bearer",
-      user: {
-        id: userId,
-        aud: "authenticated",
-        role: "authenticated",
-        email: "qa@walkenhorst.test",
-        app_metadata: { provider: "email", providers: ["email"], workspace_owner_id: userId },
-        user_metadata: { full_name: "QA Walkenhorst" },
-        identities: [],
-        created_at: "2026-08-27T09:00:00.000Z",
-        updated_at: "2026-08-27T09:00:00.000Z",
-      },
-    };
-    window.localStorage.setItem("sb-qa-auth-token", JSON.stringify(session));
-  }, { userId: USER_ID });
-}
-
 function json(route: Route, value: unknown, status = 200, extraHeaders: Record<string, string> = {}) {
   return route.fulfill({
     status,
     contentType: "application/json",
-    headers: { "access-control-allow-origin": "*", ...extraHeaders },
+    headers: {
+      "access-control-allow-origin": "*",
+      "access-control-allow-headers": "authorization,apikey,content-type,x-client-info,x-supabase-api-version",
+      ...extraHeaders,
+    },
     body: JSON.stringify(value),
   });
 }
@@ -144,25 +147,37 @@ async function mockSupabase(page: Page, state: MockState = {}) {
     const accept = request.headers()["accept"] || "";
     const single = accept.includes("application/vnd.pgrst.object+json");
 
-    if (request.method() === "OPTIONS") return route.fulfill({ status: 204, headers: { "access-control-allow-origin": "*", "access-control-allow-headers": "*" } });
-    if (path === "/auth/v1/user") return json(route, {
-      id: USER_ID,
-      aud: "authenticated",
-      role: "authenticated",
-      email: "qa@walkenhorst.test",
-      app_metadata: { provider: "email", providers: ["email"], workspace_owner_id: USER_ID },
-      user_metadata: { full_name: "QA Walkenhorst" },
-      identities: [],
-      created_at: "2026-08-27T09:00:00.000Z",
-      updated_at: "2026-08-27T09:00:00.000Z",
-    });
+    if (request.method() === "OPTIONS") {
+      return route.fulfill({
+        status: 204,
+        headers: {
+          "access-control-allow-origin": "*",
+          "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS,HEAD",
+          "access-control-allow-headers": "authorization,apikey,content-type,x-client-info,x-supabase-api-version,prefer,accept-profile,content-profile",
+        },
+      });
+    }
+
+    if (path === "/auth/v1/token" && request.method() === "POST") {
+      return json(route, authSession);
+    }
+    if (path === "/auth/v1/user") return json(route, authUser);
 
     if (path.startsWith("/functions/v1/")) {
       const body = request.postDataJSON?.() ?? {};
       actions.push({ endpoint: path.split("/").pop() || "", body });
       if (path.endsWith("/crm-render-queue")) return json(route, { queued: 1, skipped: 0, failed: 0, result: { status: "queued" } });
       if (path.endsWith("/crm-lead-workflow")) {
-        if (body.action === "status" || body.action === "preflight") return json(route, { ok: true, workflow: flow, contacts: [{ id: "contact-1", name: lead.contact_name, title: lead.contact_title, email: lead.email, phone: lead.phone, source_url: lead.website, confidence: 99, is_primary: true, source: "qa" }], page: detailPage, draft, gates });
+        if (body.action === "status" || body.action === "preflight") {
+          return json(route, {
+            ok: true,
+            workflow: flow,
+            contacts: [{ id: "contact-1", name: lead.contact_name, title: lead.contact_title, email: lead.email, phone: lead.phone, source_url: lead.website, confidence: 99, is_primary: true, source: "qa" }],
+            page: detailPage,
+            draft,
+            gates,
+          });
+        }
         return json(route, { ok: true, workflow: flow, page: detailPage, draft, gates });
       }
       return json(route, { ok: true });
@@ -188,13 +203,18 @@ async function mockSupabase(page: Page, state: MockState = {}) {
   return actions;
 }
 
-test.beforeEach(async ({ page }) => {
-  await installSession(page);
-});
+async function openProtected(page: Page, path: string) {
+  await page.goto(path);
+  await expect(page.getByRole("button", { name: "Anmelden", exact: true })).toBeVisible();
+  await page.locator('input[name="email"]').fill(QA_EMAIL);
+  await page.locator('input[name="password"]').fill(QA_PASSWORD);
+  await page.getByRole("button", { name: "Anmelden", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Anmelden", exact: true })).toBeHidden();
+}
 
 test("CRM loads with process state and watchtime", async ({ page }) => {
   await mockSupabase(page);
-  await page.goto("/crm/commercial");
+  await openProtected(page, "/crm/commercial");
   await expect(page.getByRole("heading", { name: "Gewerbe CRM" })).toBeVisible();
   await expect(page.getByText("QA Solarwerke GmbH", { exact: true })).toBeVisible();
   await expect(page.getByText("Prüfung", { exact: true })).toBeVisible();
@@ -203,7 +223,7 @@ test("CRM loads with process state and watchtime", async ({ page }) => {
 
 test("lead opens from commercial CRM", async ({ page }) => {
   await mockSupabase(page);
-  await page.goto("/crm/commercial");
+  await openProtected(page, "/crm/commercial");
   await page.getByText("QA Solarwerke GmbH", { exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/leads/${LEAD_ID}$`));
   await expect(page.getByText("QA Solarwerke GmbH", { exact: true }).first()).toBeVisible();
@@ -211,7 +231,7 @@ test("lead opens from commercial CRM", async ({ page }) => {
 
 test("bulk checkbox, enrichment and landingpage actions work", async ({ page }) => {
   const actions = await mockSupabase(page);
-  await page.goto("/crm/commercial");
+  await openProtected(page, "/crm/commercial");
   const boxes = page.getByRole("checkbox");
   await boxes.nth(1).check();
   await expect(page.getByText("1 ausgewählt", { exact: true })).toBeVisible();
@@ -225,7 +245,7 @@ test("bulk checkbox, enrichment and landingpage actions work", async ({ page }) 
 
 test("render bulk queues a job without navigating to Studio", async ({ page }) => {
   const actions = await mockSupabase(page);
-  await page.goto("/crm/commercial");
+  await openProtected(page, "/crm/commercial");
   await page.getByRole("checkbox").nth(1).check();
   await page.getByRole("button", { name: "Videos rendern", exact: true }).click();
   await expect.poll(() => actions.some((x) => x.endpoint === "crm-render-queue" && x.body.action === "bulk_queue" && x.body.leadIds?.includes(LEAD_ID))).toBeTruthy();
@@ -248,7 +268,7 @@ test("mail send stays blocked until rendered video exists", async ({ page }) => 
     page: { id: PAGE_ID, slug: "qa-walkenhorst", status: "published", is_public: true, rendered_video_url: null, rendered_at: null, template_key: "energiekosten", duration_seconds: 107, updated_at: "2026-08-27T10:10:00.000Z" },
     gates: { checks: [{ key: "video", label: "Video fertig gerendert", ok: false }], allPassed: false, sendPassed: false },
   });
-  await page.goto(`/leads/${LEAD_ID}`);
+  await openProtected(page, `/leads/${LEAD_ID}`);
   const send = page.getByRole("button", { name: "E-Mail senden", exact: true });
   await expect(send).toBeVisible();
   await expect(send).toBeDisabled();
