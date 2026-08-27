@@ -1,3 +1,5 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { chromium } from "playwright";
 
 const storage = "https://jiahshldcusphxtbqxpv.supabase.co/storage/v1/object/public/energy-media/1b6c9d54-48c7-4bda-bac0-5ede3c71e197/template-slides";
@@ -12,6 +14,9 @@ const slides = [
   "c3549308-0fa3-42f9-9921-a64820f32506-energiekosten-slide-08-capture.webp",
 ];
 
+const cacheDir = path.resolve(".webmotion/assets");
+await mkdir(cacheDir, { recursive: true });
+
 const failures = [];
 const browser = await chromium.launch();
 try {
@@ -23,8 +28,8 @@ try {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const type = response.headers.get("content-type") || "";
       if (!type.toLowerCase().includes("image/webp")) throw new Error(`unerwarteter Content-Type: ${type || "leer"}`);
-      const bytes = Buffer.from(await response.arrayBuffer()).length;
-      if (bytes < 20_000) throw new Error(`Datei auffällig klein (${bytes} Bytes)`);
+      const buffer = Buffer.from(await response.arrayBuffer());
+      if (buffer.length < 20_000) throw new Error(`Datei auffällig klein (${buffer.length} Bytes)`);
 
       const decoded = await page.evaluate(async (src) => {
         return await new Promise((resolve) => {
@@ -47,7 +52,10 @@ try {
       if (decoded.width !== 1280 || decoded.height !== 720) {
         throw new Error(`falsche decodierte Größe ${decoded.width}x${decoded.height}, erwartet 1280x720`);
       }
-      process.stdout.write(`✓ Slide ${index + 1}: ${decoded.width}x${decoded.height}, ${Math.round(bytes / 1024)} KB, Browser-Decode OK\n`);
+
+      const localName = `energiekosten-${String(index + 1).padStart(2, "0")}.webp`;
+      await writeFile(path.join(cacheDir, localName), buffer);
+      process.stdout.write(`✓ Slide ${index + 1}: ${decoded.width}x${decoded.height}, ${Math.round(buffer.length / 1024)} KB, Browser-Decode OK → ${localName}\n`);
     } catch (error) {
       failures.push(`Slide ${index + 1}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -62,4 +70,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log("\n✓ Alle 8 Energiekosten-Production-Assets sind erreichbar, im Chromium decodierbar und exakt 1280x720.");
+console.log("\n✓ Alle 8 Energiekosten-Production-Assets sind erreichbar, im Chromium decodierbar, exakt 1280x720 und lokal für WebMotion QA gecacht.");
