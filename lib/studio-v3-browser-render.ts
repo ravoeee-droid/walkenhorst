@@ -1,7 +1,6 @@
 "use client";
 
 import type { StudioV3BrandKit, StudioV3Item, StudioV3LeadVariables, StudioV3Timeline } from "@/lib/studio-v3";
-import { renderStudioV3Browser as renderCore } from "@/lib/studio-v3-browser-render-core";
 
 type Options = {
   timeline: StudioV3Timeline;
@@ -13,7 +12,14 @@ type Options = {
   maxWidth?: number;
 };
 
-type RenderResult = Awaited<ReturnType<typeof renderCore>>;
+type RenderResult = {
+  blob: Blob;
+  format: "mp4";
+  mimeType: "video/mp4";
+  warnings: string[];
+  width: number;
+  height: number;
+};
 
 const ENERGY_SPRITE = "/assets/energiekosten/production-sprite.webp";
 const ENERGY_TIMINGS: Record<number, [number, number]> = {
@@ -154,6 +160,7 @@ async function preflight(timeline: StudioV3Timeline, resolveSource: (item: Studi
 }
 
 export async function renderStudioV3Browser(options: Options): Promise<RenderResult> {
+  if (typeof window === "undefined") throw new Error("Video-Rendering ist nur im Browser verfügbar.");
   const { timeline, energy } = normalizeTimeline(options.timeline);
   const slideUrls = energy ? await buildEnergySlides() : new Map<number, string>();
   const resolveSource = (item: StudioV3Item) => {
@@ -169,6 +176,7 @@ export async function renderStudioV3Browser(options: Options): Promise<RenderRes
     await preflight(timeline, resolveSource);
     if (controller.signal.aborted || options.signal?.aborted) throw new DOMException("Render abgebrochen", "AbortError");
     const deadline = Math.max(180000, timeline.durationMs * 2.5);
+    const { renderStudioV3Browser: renderCore } = await import("@/lib/studio-v3-browser-render-core");
     return await withTimeout(
       renderCore({ ...options, timeline, resolveSource, signal: controller.signal }),
       deadline,
