@@ -81,8 +81,18 @@ jobs:
         run: |
           state=$([ "$STATE" = "success" ] && echo success || echo failure)
           curl -sS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.sha }} -d "{\"state\":\"$state\",\"context\":\"walkenhorst-ci/playwright\"}" >/dev/null
+      - id: energyassets
+        if: steps.nextbuild.outcome == 'success'
+        continue-on-error: true
+        run: npm run qa:video:assets
+      - name: Publish Energiekosten asset status
+        if: always() && steps.nextbuild.outcome == 'success'
+        env: { GH_TOKEN: "${{ github.token }}", STATE: "${{ steps.energyassets.outcome }}" }
+        run: |
+          state=$([ "$STATE" = "success" ] && echo success || echo failure)
+          curl -sS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.sha }} -d "{\"state\":\"$state\",\"context\":\"walkenhorst-ci/energiekosten-assets\"}" >/dev/null
       - id: webmotionlint
-        if: steps.browsers.outcome == 'success'
+        if: steps.browsers.outcome == 'success' && steps.energyassets.outcome == 'success'
         continue-on-error: true
         run: npm run qa:video:lint
       - name: Publish WebMotion lint status
@@ -112,5 +122,5 @@ jobs:
             test-results
             .webmotion/shots
       - name: Fail workflow if verification failed
-        if: steps.install.outcome != 'success' || steps.audit.outcome != 'success' || steps.typecheck.outcome != 'success' || steps.nextbuild.outcome != 'success' || steps.browsers.outcome != 'success' || steps.playwright.outcome != 'success' || steps.webmotionlint.outcome != 'success' || steps.webmotionshoot.outcome != 'success'
+        if: steps.install.outcome != 'success' || steps.audit.outcome != 'success' || steps.typecheck.outcome != 'success' || steps.nextbuild.outcome != 'success' || steps.browsers.outcome != 'success' || steps.playwright.outcome != 'success' || steps.energyassets.outcome != 'success' || steps.webmotionlint.outcome != 'success' || steps.webmotionshoot.outcome != 'success'
         run: exit 1
