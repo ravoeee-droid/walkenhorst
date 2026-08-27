@@ -1,14 +1,13 @@
 const fps = 30;
-const storage = "https://jiahshldcusphxtbqxpv.supabase.co/storage/v1/object/public/energy-media/1b6c9d54-48c7-4bda-bac0-5ede3c71e197/template-slides";
 const slides = [
-  `${storage}/bd91683f-15b1-464a-bbe1-9aeea72b6719-energiekosten-slide-01-capture.webp`,
-  `${storage}/beb727d7-6f53-42e4-9e26-6862fb432790-energiekosten-slide-02-capture.webp`,
-  `${storage}/4ff3c801-99e8-4dac-a1bc-a7f43b8b9937-energiekosten-slide-03-capture.webp`,
-  `${storage}/8ebb9736-2d51-4c86-8822-dd322db83c43-energiekosten-slide-04-capture.webp`,
-  `${storage}/8e7e31b9-8386-452f-958f-62daf6b0712a-energiekosten-slide-05-capture.webp`,
-  `${storage}/f0a7e3b3-013e-4c5e-bb0a-2fbd82858465-energiekosten-slide-06-capture.webp`,
-  `${storage}/2b9ef9c4-88eb-4c52-b5ea-e967a698c6ce-energiekosten-slide-07-capture.webp`,
-  `${storage}/c3549308-0fa3-42f9-9921-a64820f32506-energiekosten-slide-08-capture.webp`,
+  "/.webmotion/assets/energiekosten-01.webp",
+  "/.webmotion/assets/energiekosten-02.webp",
+  "/.webmotion/assets/energiekosten-03.webp",
+  "/.webmotion/assets/energiekosten-04.webp",
+  "/.webmotion/assets/energiekosten-05.webp",
+  "/.webmotion/assets/energiekosten-06.webp",
+  "/.webmotion/assets/energiekosten-07.webp",
+  "/.webmotion/assets/energiekosten-08.webp",
 ];
 const beats = [
   { label: "Website", from: 0, to: 14200, kind: "website" },
@@ -40,13 +39,13 @@ function slideMarkup(beat) {
         <div style="text-align:center;max-width:780px;padding:50px">
           <div style="font-size:19px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#a77b13">Walkenhorst Energie</div>
           <div style="font-size:52px;line-height:1.04;font-weight:850;margin-top:18px">Website-Analyse · personalisierter Einstieg</div>
-          <div style="font-size:23px;line-height:1.45;color:#5f625e;margin-top:20px">Der echte Website-Capture wird pro Lead im Render-Preflight geprüft. Diese QA-Komposition sichert die Master-Timeline und die acht 1280×720 Production-Slides.</div>
+          <div style="font-size:23px;line-height:1.45;color:#5f625e;margin-top:20px">Der echte Website-Capture wird pro Lead im Render-Preflight geprüft. Diese QA-Komposition verwendet exakt die acht zuvor im Chromium validierten 1280×720 Production-Slides.</div>
         </div>
       </w-el>`;
   }
   return `
     <w-el x="0" y="0" width="1280" height="720" style="overflow:hidden;background:#111">
-      <img src="${slides[beat.slide]}" crossorigin="anonymous" alt="${beat.label}" style="position:absolute;inset:0;width:1280px;height:720px;object-fit:cover" />
+      <img src="${slides[beat.slide]}" alt="${beat.label}" style="position:absolute;inset:0;width:1280px;height:720px;object-fit:cover" />
     </w-el>`;
 }
 
