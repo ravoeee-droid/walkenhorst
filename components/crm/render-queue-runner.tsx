@@ -4,40 +4,554 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
 import { renderStudioV3Browser } from "@/lib/studio-v3-browser-render";
-import { WALKENHORST_BRAND_DEFAULT, type StudioV3BrandKit, type StudioV3Item, type StudioV3LeadVariables, type StudioV3Timeline } from "@/lib/studio-v3";
+import {
+  WALKENHORST_BRAND_DEFAULT,
+  type StudioV3BrandKit,
+  type StudioV3Item,
+  type StudioV3LeadVariables,
+  type StudioV3Timeline,
+} from "@/lib/studio-v3";
 
-type Job={id:string;lead_id:string|null;video_page_id:string|null;status:string;progress:number;error:string|null;metadata:Record<string,unknown>|null;created_at:string;started_at:string|null;completed_at:string|null};
-type PageRow={id:string;lead_id:string;slug:string;company_name:string;prospect_name:string|null;website_url:string|null;presenter_video_url:string|null;website_capture_url:string|null;timeline_v3:unknown;studio_config:unknown;brand_kit_snapshot:unknown;rendered_video_url:string|null;template_key:string|null};
-type LeadRow={id:string;company_name:string;contact_name:string|null;website:string|null;city:string|null;industry:string|null;roof_area_m2:number|null;energy_score:number;total_score:number;summary:string|null;next_action:string|null};
-type AssetRow={id:string;storage_bucket:string;storage_path:string};
-type Bindings={presenterAssetId?:string;websiteCaptureAssetId?:string;mapAssetId?:string;logoAssetId?:string;portraitAssetId?:string};
-const ownerId=(user:User)=>typeof user.app_metadata?.workspace_owner_id==="string"&&user.app_metadata.workspace_owner_id.trim()?user.app_metadata.workspace_owner_id.trim():user.id;
-function brand(value:unknown):StudioV3BrandKit{const raw=value&&typeof value==="object"?value as Partial<StudioV3BrandKit>:{};return{...WALKENHORST_BRAND_DEFAULT,...raw,metadata:{...WALKENHORST_BRAND_DEFAULT.metadata,...(raw.metadata||{})}}}
-async function compactRecorder<T>(run:()=>Promise<T>){const Native=(window as any).MediaRecorder as typeof MediaRecorder|undefined;if(!Native)return run();const Compact=new Proxy(Native,{construct(Target,args){const[stream,options]=args as [MediaStream,MediaRecorderOptions?];return Reflect.construct(Target,[stream,{...(options||{}),videoBitsPerSecond:2_800_000,audioBitsPerSecond:128_000}])}}) as typeof MediaRecorder;(window as any).MediaRecorder=Compact;try{return await run()}finally{(window as any).MediaRecorder=Native}}
+type Job = {
+  id: string;
+  lead_id: string | null;
+  video_page_id: string | null;
+  status: string;
+  progress: number;
+  error: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+};
 
-export function RenderQueueRunner({user}:{user:User}){
-  const supabase=useMemo(()=>createSupabaseBrowserClient(),[]);const uid=ownerId(user);const running=useRef(false);const[active,setActive]=useState<Job|null>(null);const[queued,setQueued]=useState(0);const[lastMessage,setLastMessage]=useState<string|null>(null);const[lastError,setLastError]=useState<string|null>(null);
-  const emit=useCallback((job:Job)=>window.dispatchEvent(new CustomEvent("walkenhorst:render-job",{detail:{leadId:job.lead_id,job}})),[]);
-  const countQueue=useCallback(async()=>{if(!supabase)return;const r=await supabase.from("energy_render_jobs").select("id",{count:"exact",head:true}).eq("user_id",uid).eq("status","queued");if(!r.error)setQueued(r.count||0)},[supabase,uid]);
-  const processJob=useCallback(async(job:Job)=>{if(!supabase||!job.video_page_id||!job.lead_id)return;let current={...job,status:"preparing",progress:2};setActive(current);emit(current);const preparing=await supabase.from("energy_render_jobs").update({status:"preparing",progress:2,started_at:new Date().toISOString(),error:null}).eq("id",job.id).eq("user_id",uid);if(preparing.error)throw preparing.error;
-    try{
-      const[pageResult,leadResult]=await Promise.all([supabase.from("energy_video_pages").select("id,lead_id,slug,company_name,prospect_name,website_url,presenter_video_url,website_capture_url,timeline_v3,studio_config,brand_kit_snapshot,rendered_video_url,template_key").eq("id",job.video_page_id).eq("user_id",uid).single(),supabase.from("energy_leads").select("id,company_name,contact_name,website,city,industry,roof_area_m2,energy_score,total_score,summary,next_action").eq("id",job.lead_id).eq("user_id",uid).single()]);if(pageResult.error)throw pageResult.error;if(leadResult.error)throw leadResult.error;const page=pageResult.data as PageRow,lead=leadResult.data as LeadRow;const timeline=page.timeline_v3 as StudioV3Timeline;if(!timeline||timeline.version!==3||!Array.isArray(timeline.tracks))throw new Error("Die veröffentlichte Video-Timeline ist ungültig.");const snapshot=brand(page.brand_kit_snapshot);const raw=page.studio_config&&typeof page.studio_config==="object"?page.studio_config as Record<string,unknown>:{};const bindings=((raw.bindings&&typeof raw.bindings==="object"?raw.bindings:{}) as Bindings);
-      const ids=new Set<string>();for(const track of timeline.tracks)for(const item of track.items)if(item.assetId)ids.add(item.assetId);for(const value of Object.values(bindings))if(value)ids.add(String(value));let assetRows:AssetRow[]=[];if(ids.size){const a=await supabase.from("energy_media_assets").select("id,storage_bucket,storage_path").eq("user_id",uid).in("id",Array.from(ids));if(a.error)throw a.error;assetRows=(a.data||[]) as AssetRow[]}
-      const urls=new Map<string,string>();for(const asset of assetRows){const url=supabase.storage.from(asset.storage_bucket||"energy-media").getPublicUrl(asset.storage_path).data.publicUrl;if(url)urls.set(asset.id,url)}
-      const resolveSource=(item:StudioV3Item)=>{if(item.sourceUrl)return item.sourceUrl;if(item.assetId&&urls.has(item.assetId))return urls.get(item.assetId)||null;let id:string|undefined;if(item.dynamicSource==="presenter")id=bindings.presenterAssetId;if(item.dynamicSource==="website_capture")id=bindings.websiteCaptureAssetId;if(item.dynamicSource==="map")id=bindings.mapAssetId;if(item.dynamicSource==="logo")id=bindings.logoAssetId;if(item.dynamicSource==="portrait")id=bindings.portraitAssetId;if(id&&urls.has(id))return urls.get(id)||null;if(item.dynamicSource==="presenter")return page.presenter_video_url;if(item.dynamicSource==="website_capture")return page.website_capture_url;if(item.dynamicSource==="logo")return snapshot.logoUrl||null;if(item.dynamicSource==="portrait")return snapshot.portraitUrl||null;return null};
-      const variables:StudioV3LeadVariables={company:lead.company_name,firstname:lead.contact_name,website:lead.website||page.website_url,city:lead.city,industry:lead.industry,problem:lead.next_action||lead.summary,opportunity:lead.total_score,roof_area:lead.roof_area_m2,energy_score:lead.energy_score,cta:snapshot.defaultCtaLabel};
-      current={...current,status:"rendering",progress:4,metadata:{...(job.metadata||{}),company_name:lead.company_name}};setActive(current);emit(current);const started=await supabase.from("energy_render_jobs").update({status:"rendering",progress:4,metadata:current.metadata}).eq("id",job.id).eq("user_id",uid);if(started.error)throw started.error;let persisted=4;
-      const result=await compactRecorder(()=>renderStudioV3Browser({timeline,brand:snapshot,variables,resolveSource,maxWidth:1280,onProgress:value=>{const p=Math.max(4,Math.min(94,Math.round(value*.9+4)));current={...current,status:"rendering",progress:p};setActive(current);emit(current);if(p-persisted>=4){persisted=p;void supabase.from("energy_render_jobs").update({status:"rendering",progress:p}).eq("id",job.id).eq("user_id",uid)}}));if(result.blob.size>49*1024*1024)throw new Error(`Render ist mit ${Math.round(result.blob.size/1024/1024)} MB zu groß. Bitte Qualität/Bitrate reduzieren.`);
-      current={...current,status:"uploading",progress:96};setActive(current);emit(current);const uploading=await supabase.from("energy_render_jobs").update({status:"uploading",progress:96}).eq("id",job.id).eq("user_id",uid);if(uploading.error)throw uploading.error;const ext=result.format;const path=`${uid}/renders/${job.lead_id}/${job.id}.${ext}`;const upload=await supabase.storage.from("energy-media").upload(path,result.blob,{upsert:true,contentType:result.mimeType,cacheControl:"31536000"});if(upload.error)throw upload.error;const outputUrl=supabase.storage.from("energy-media").getPublicUrl(path).data.publicUrl;const now=new Date().toISOString();
-      const assetInsert=await supabase.from("energy_media_assets").insert({user_id:uid,filename:`${lead.company_name}-render.${ext}`.replace(/[^a-zA-Z0-9._-]+/g,"-"),kind:"render",mime_type:result.mimeType,size_bytes:result.blob.size,storage_bucket:"energy-media",storage_path:path,label:`Finaler CRM-Render · ${lead.company_name}`,metadata:{render_job_id:job.id,lead_id:job.lead_id,source:"crm_render_queue",width:result.width,height:result.height,warnings:result.warnings}});if(assetInsert.error)throw assetInsert.error;
-      const pageUpdate=await supabase.from("energy_video_pages").update({rendered_video_url:outputUrl,rendered_video_format:result.format,rendered_at:now,updated_at:now}).eq("id",page.id).eq("user_id",uid);if(pageUpdate.error)throw pageUpdate.error;
-      const activity=await supabase.from("energy_activities").insert({user_id:uid,lead_id:job.lead_id,activity_type:"video_rendered",title:"Video automatisch gerendert",detail:"Finales Video wurde im CRM erstellt und mit der Landingpage verbunden.",metadata:{render_job_id:job.id,video_page_id:page.id,output_url:outputUrl}});if(activity.error)throw activity.error;
-      const completed=await supabase.from("energy_render_jobs").update({status:"completed",progress:100,output_bucket:"energy-media",output_path:path,output_url:outputUrl,completed_at:now,error:null,metadata:{...(current.metadata||{}),warnings:result.warnings,width:result.width,height:result.height,mime_type:result.mimeType}}).eq("id",job.id).eq("user_id",uid);if(completed.error)throw completed.error;
-      current={...current,status:"completed",progress:100,completed_at:now};setActive(current);emit(current);setLastError(null);setLastMessage(`${lead.company_name}: Video fertig`);window.setTimeout(()=>setLastMessage(null),6500);window.setTimeout(()=>setActive(value=>value?.id===job.id?null:value),6500);
-    }catch(e){const message=e instanceof Error?e.message:"Rendering fehlgeschlagen";const now=new Date().toISOString();await supabase.from("energy_render_jobs").update({status:"failed",error:message,completed_at:now}).eq("id",job.id).eq("user_id",uid);const failed={...job,status:"failed",progress:current.progress||job.progress||0,error:message,completed_at:now};setActive(failed);emit(failed);setLastError(message);window.setTimeout(()=>setActive(value=>value?.id===job.id?null:value),9000)}
-  },[emit,supabase,uid]);
-  const pump=useCallback(async()=>{if(!supabase||running.current)return;const q=await supabase.from("energy_render_jobs").select("id,lead_id,video_page_id,status,progress,error,metadata,created_at,started_at,completed_at").eq("user_id",uid).eq("status","queued").order("created_at",{ascending:true}).limit(1).maybeSingle();if(q.error||!q.data)return;const claim=await supabase.from("energy_render_jobs").update({status:"preparing",progress:1,started_at:new Date().toISOString(),error:null}).eq("id",q.data.id).eq("user_id",uid).eq("status","queued").select("id,lead_id,video_page_id,status,progress,error,metadata,created_at,started_at,completed_at").maybeSingle();if(claim.error||!claim.data)return;running.current=true;try{await processJob(claim.data as Job)}catch(e){console.error("CRM render queue",e)}finally{running.current=false;await countQueue();window.setTimeout(()=>void pump(),180)}},[countQueue,processJob,supabase,uid]);
-  useEffect(()=>{if(!supabase)return;void supabase.rpc("energy_cancel_stale_render_jobs",{p_user_id:uid,p_minutes:30});void countQueue();void pump();const poll=window.setInterval(()=>{void countQueue();void pump()},1800);const kick=()=>{void countQueue();void pump()};window.addEventListener("walkenhorst:render-queue-kick",kick);return()=>{window.clearInterval(poll);window.removeEventListener("walkenhorst:render-queue-kick",kick)}},[countQueue,pump,supabase,uid]);
-  const visible=Boolean(active||queued||lastMessage||lastError);if(!visible)return null;const company=String(active?.metadata?.company_name||"Video-Produktion");const progress=Math.max(0,Math.min(100,active?.progress||0));const failed=active?.status==="failed";
-  return <aside style={{position:"fixed",right:20,bottom:20,zIndex:1800,width:"min(390px,calc(100vw - 28px))",border:"1px solid rgba(94,234,212,.18)",borderRadius:18,background:"linear-gradient(145deg,rgba(7,26,43,.98),rgba(13,47,68,.98))",color:"#fff",boxShadow:"0 24px 70px rgba(3,15,26,.32)",padding:"15px 16px 14px",backdropFilter:"blur(20px)"}} aria-live="polite"><div style={{display:"flex",alignItems:"center",gap:10}}><span style={{width:10,height:10,borderRadius:999,background:failed?"#fb7185":active?.status==="completed"?"#5eead4":"#2dd4bf",boxShadow:`0 0 0 5px ${failed?"rgba(251,113,133,.12)":"rgba(45,212,191,.12)"}`}}/><div style={{minWidth:0,flex:1}}><strong style={{display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontSize:12.5}}>{failed?"Render fehlgeschlagen":active?.status==="completed"?"Video fertig":active?"Video wird automatisch erstellt":"Render-Queue"}</strong><small style={{display:"block",marginTop:2,color:"#9fc1cc",fontSize:10,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{active?company:lastMessage||`${queued} Videos warten`}</small></div><span style={{color:"#5eead4",fontSize:13,fontWeight:800}}>{active&&!failed?`${progress}%`:queued?`${queued} queued`:""}</span></div>{active&&!failed?<><div style={{height:7,marginTop:12,borderRadius:999,overflow:"hidden",background:"rgba(255,255,255,.09)"}}><span style={{display:"block",height:"100%",width:`${progress}%`,borderRadius:999,background:"linear-gradient(90deg,#14b8a6,#5eead4)",transition:"width .25s ease"}}/></div><div style={{display:"flex",justifyContent:"space-between",marginTop:7,color:"#84a6b2",fontSize:9.5}}><span>{active.status==="queued"?"Wartet":active.status==="preparing"?"Assets werden vorbereitet":active.status==="uploading"?"Video wird hochgeladen":"Canvas + Talking Head werden gerendert"}</span><span>{queued>0?`+ ${queued} danach`:"Letzter Job"}</span></div></>:null}{failed?<p style={{margin:"10px 0 0",color:"#fecdd3",fontSize:10.5,lineHeight:1.45}}>{lastError||active?.error}</p>:null}</aside>
+type PageRow = {
+  id: string;
+  lead_id: string;
+  slug: string;
+  company_name: string;
+  prospect_name: string | null;
+  website_url: string | null;
+  presenter_video_url: string | null;
+  website_capture_url: string | null;
+  timeline_v3: unknown;
+  studio_config: unknown;
+  brand_kit_snapshot: unknown;
+  rendered_video_url: string | null;
+  template_key: string | null;
+};
+
+type LeadRow = {
+  id: string;
+  company_name: string;
+  contact_name: string | null;
+  website: string | null;
+  city: string | null;
+  industry: string | null;
+  roof_area_m2: number | null;
+  energy_score: number;
+  total_score: number;
+  summary: string | null;
+  next_action: string | null;
+};
+
+type AssetRow = { id: string; storage_bucket: string; storage_path: string };
+type Bindings = {
+  presenterAssetId?: string;
+  websiteCaptureAssetId?: string;
+  mapAssetId?: string;
+  logoAssetId?: string;
+  portraitAssetId?: string;
+};
+
+function ownerId(user: User) {
+  const owner = user.app_metadata?.workspace_owner_id;
+  return typeof owner === "string" && owner.trim() ? owner.trim() : user.id;
+}
+
+function resolveBrand(value: unknown): StudioV3BrandKit {
+  const raw = value && typeof value === "object" ? (value as Partial<StudioV3BrandKit>) : {};
+  return {
+    ...WALKENHORST_BRAND_DEFAULT,
+    ...raw,
+    metadata: { ...WALKENHORST_BRAND_DEFAULT.metadata, ...(raw.metadata || {}) },
+  };
+}
+
+async function withCompactMediaRecorder<T>(run: () => Promise<T>) {
+  const host = window as any;
+  const Native = host.MediaRecorder as typeof MediaRecorder | undefined;
+  if (!Native) return run();
+
+  const Compact = new Proxy(Native, {
+    construct(Target, args) {
+      const [stream, options] = args as [MediaStream, MediaRecorderOptions?];
+      return Reflect.construct(Target, [
+        stream,
+        {
+          ...(options || {}),
+          videoBitsPerSecond: 2_800_000,
+          audioBitsPerSecond: 128_000,
+        },
+      ]);
+    },
+  }) as typeof MediaRecorder;
+
+  host.MediaRecorder = Compact;
+  try {
+    return await run();
+  } finally {
+    host.MediaRecorder = Native;
+  }
+}
+
+export function RenderQueueRunner({ user }: { user: User }) {
+  const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+  const uid = ownerId(user);
+  const running = useRef(false);
+  const [active, setActive] = useState<Job | null>(null);
+  const [queued, setQueued] = useState(0);
+  const [lastMessage, setLastMessage] = useState<string | null>(null);
+  const [lastError, setLastError] = useState<string | null>(null);
+
+  const emit = useCallback((job: Job) => {
+    window.dispatchEvent(
+      new CustomEvent("walkenhorst:render-job", { detail: { leadId: job.lead_id, job } }),
+    );
+  }, []);
+
+  const countQueue = useCallback(async () => {
+    if (!supabase) return;
+    const result = await supabase
+      .from("energy_render_jobs")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", uid)
+      .eq("status", "queued");
+    if (!result.error) setQueued(result.count || 0);
+  }, [supabase, uid]);
+
+  const processJob = useCallback(
+    async (job: Job) => {
+      if (!supabase || !job.video_page_id || !job.lead_id) return;
+
+      let current: Job = { ...job, status: "preparing", progress: 2 };
+      setActive(current);
+      emit(current);
+
+      const preparing = await supabase
+        .from("energy_render_jobs")
+        .update({ status: "preparing", progress: 2, started_at: new Date().toISOString(), error: null })
+        .eq("id", job.id)
+        .eq("user_id", uid);
+      if (preparing.error) throw preparing.error;
+
+      try {
+        const [pageResult, leadResult] = await Promise.all([
+          supabase
+            .from("energy_video_pages")
+            .select(
+              "id,lead_id,slug,company_name,prospect_name,website_url,presenter_video_url,website_capture_url,timeline_v3,studio_config,brand_kit_snapshot,rendered_video_url,template_key",
+            )
+            .eq("id", job.video_page_id)
+            .eq("user_id", uid)
+            .single(),
+          supabase
+            .from("energy_leads")
+            .select(
+              "id,company_name,contact_name,website,city,industry,roof_area_m2,energy_score,total_score,summary,next_action",
+            )
+            .eq("id", job.lead_id)
+            .eq("user_id", uid)
+            .single(),
+        ]);
+
+        if (pageResult.error) throw pageResult.error;
+        if (leadResult.error) throw leadResult.error;
+
+        const page = pageResult.data as PageRow;
+        const lead = leadResult.data as LeadRow;
+        const timeline = page.timeline_v3 as StudioV3Timeline;
+        if (!timeline || timeline.version !== 3 || !Array.isArray(timeline.tracks)) {
+          throw new Error("Die veröffentlichte Video-Timeline ist ungültig.");
+        }
+
+        const brand = resolveBrand(page.brand_kit_snapshot);
+        const rawConfig =
+          page.studio_config && typeof page.studio_config === "object"
+            ? (page.studio_config as Record<string, unknown>)
+            : {};
+        const bindings =
+          rawConfig.bindings && typeof rawConfig.bindings === "object"
+            ? (rawConfig.bindings as Bindings)
+            : {};
+
+        const assetIds = new Set<string>();
+        for (const track of timeline.tracks) {
+          for (const item of track.items) if (item.assetId) assetIds.add(item.assetId);
+        }
+        for (const value of Object.values(bindings)) if (value) assetIds.add(String(value));
+
+        let assets: AssetRow[] = [];
+        if (assetIds.size) {
+          const assetResult = await supabase
+            .from("energy_media_assets")
+            .select("id,storage_bucket,storage_path")
+            .eq("user_id", uid)
+            .in("id", Array.from(assetIds));
+          if (assetResult.error) throw assetResult.error;
+          assets = (assetResult.data || []) as AssetRow[];
+        }
+
+        const urls = new Map<string, string>();
+        for (const asset of assets) {
+          const url = supabase.storage
+            .from(asset.storage_bucket || "energy-media")
+            .getPublicUrl(asset.storage_path).data.publicUrl;
+          if (url) urls.set(asset.id, url);
+        }
+
+        const resolveSource = (item: StudioV3Item) => {
+          if (item.sourceUrl) return item.sourceUrl;
+          if (item.assetId && urls.has(item.assetId)) return urls.get(item.assetId) || null;
+
+          let id: string | undefined;
+          if (item.dynamicSource === "presenter") id = bindings.presenterAssetId;
+          if (item.dynamicSource === "website_capture") id = bindings.websiteCaptureAssetId;
+          if (item.dynamicSource === "map") id = bindings.mapAssetId;
+          if (item.dynamicSource === "logo") id = bindings.logoAssetId;
+          if (item.dynamicSource === "portrait") id = bindings.portraitAssetId;
+          if (id && urls.has(id)) return urls.get(id) || null;
+
+          if (item.dynamicSource === "presenter") return page.presenter_video_url;
+          if (item.dynamicSource === "website_capture") return page.website_capture_url;
+          if (item.dynamicSource === "logo") return brand.logoUrl || null;
+          if (item.dynamicSource === "portrait") return brand.portraitUrl || null;
+          return null;
+        };
+
+        const variables: StudioV3LeadVariables = {
+          company: lead.company_name,
+          firstname: lead.contact_name,
+          website: lead.website || page.website_url,
+          city: lead.city,
+          industry: lead.industry,
+          problem: lead.next_action || lead.summary,
+          opportunity: lead.total_score,
+          roof_area: lead.roof_area_m2,
+          energy_score: lead.energy_score,
+          cta: brand.defaultCtaLabel,
+        };
+
+        current = {
+          ...current,
+          status: "rendering",
+          progress: 4,
+          metadata: { ...(job.metadata || {}), company_name: lead.company_name },
+        };
+        setActive(current);
+        emit(current);
+
+        const started = await supabase
+          .from("energy_render_jobs")
+          .update({ status: "rendering", progress: 4, metadata: current.metadata })
+          .eq("id", job.id)
+          .eq("user_id", uid);
+        if (started.error) throw started.error;
+
+        let persistedProgress = 4;
+        const result = await withCompactMediaRecorder(() =>
+          renderStudioV3Browser({
+            timeline,
+            brand,
+            variables,
+            resolveSource,
+            maxWidth: 1280,
+            onProgress: (value) => {
+              const progress = Math.max(4, Math.min(94, Math.round(value * 0.9 + 4)));
+              current = { ...current, status: "rendering", progress };
+              setActive(current);
+              emit(current);
+              if (progress - persistedProgress >= 4) {
+                persistedProgress = progress;
+                void supabase
+                  .from("energy_render_jobs")
+                  .update({ status: "rendering", progress })
+                  .eq("id", job.id)
+                  .eq("user_id", uid);
+              }
+            },
+          }),
+        );
+
+        if (result.blob.size > 49 * 1024 * 1024) {
+          throw new Error(
+            `Render ist mit ${Math.round(result.blob.size / 1024 / 1024)} MB zu groß. Bitte Qualität/Bitrate reduzieren.`,
+          );
+        }
+
+        current = { ...current, status: "uploading", progress: 96 };
+        setActive(current);
+        emit(current);
+
+        const uploading = await supabase
+          .from("energy_render_jobs")
+          .update({ status: "uploading", progress: 96 })
+          .eq("id", job.id)
+          .eq("user_id", uid);
+        if (uploading.error) throw uploading.error;
+
+        const ext = result.format;
+        const path = `${uid}/renders/${job.lead_id}/${job.id}.${ext}`;
+        const upload = await supabase.storage.from("energy-media").upload(path, result.blob, {
+          upsert: true,
+          contentType: result.mimeType,
+          cacheControl: "31536000",
+        });
+        if (upload.error) throw upload.error;
+
+        const outputUrl = supabase.storage.from("energy-media").getPublicUrl(path).data.publicUrl;
+        const now = new Date().toISOString();
+
+        const assetInsert = await supabase.from("energy_media_assets").insert({
+          user_id: uid,
+          filename: `${lead.company_name}-render.${ext}`.replace(/[^a-zA-Z0-9._-]+/g, "-"),
+          kind: "render",
+          mime_type: result.mimeType,
+          size_bytes: result.blob.size,
+          storage_bucket: "energy-media",
+          storage_path: path,
+          label: `Finaler CRM-Render · ${lead.company_name}`,
+          metadata: {
+            render_job_id: job.id,
+            lead_id: job.lead_id,
+            source: "crm_render_queue",
+            width: result.width,
+            height: result.height,
+            warnings: result.warnings,
+          },
+        });
+        if (assetInsert.error) throw assetInsert.error;
+
+        const pageUpdate = await supabase
+          .from("energy_video_pages")
+          .update({
+            rendered_video_url: outputUrl,
+            rendered_video_format: result.format,
+            rendered_at: now,
+            updated_at: now,
+          })
+          .eq("id", page.id)
+          .eq("user_id", uid);
+        if (pageUpdate.error) throw pageUpdate.error;
+
+        const activity = await supabase.from("energy_activities").insert({
+          user_id: uid,
+          lead_id: job.lead_id,
+          activity_type: "video_rendered",
+          title: "Video automatisch gerendert",
+          detail: "Finales Video wurde im CRM erstellt und mit der Landingpage verbunden.",
+          metadata: { render_job_id: job.id, video_page_id: page.id, output_url: outputUrl },
+        });
+        if (activity.error) throw activity.error;
+
+        const completed = await supabase
+          .from("energy_render_jobs")
+          .update({
+            status: "completed",
+            progress: 100,
+            output_bucket: "energy-media",
+            output_path: path,
+            output_url: outputUrl,
+            completed_at: now,
+            error: null,
+            metadata: {
+              ...(current.metadata || {}),
+              warnings: result.warnings,
+              width: result.width,
+              height: result.height,
+              mime_type: result.mimeType,
+            },
+          })
+          .eq("id", job.id)
+          .eq("user_id", uid);
+        if (completed.error) throw completed.error;
+
+        current = { ...current, status: "completed", progress: 100, completed_at: now };
+        setActive(current);
+        emit(current);
+        setLastError(null);
+        setLastMessage(`${lead.company_name}: Video fertig`);
+        window.setTimeout(() => setLastMessage(null), 6500);
+        window.setTimeout(() => setActive((value) => (value?.id === job.id ? null : value)), 6500);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Rendering fehlgeschlagen";
+        const now = new Date().toISOString();
+        await supabase
+          .from("energy_render_jobs")
+          .update({ status: "failed", error: message, completed_at: now })
+          .eq("id", job.id)
+          .eq("user_id", uid);
+
+        const failed: Job = {
+          ...job,
+          status: "failed",
+          progress: current.progress || job.progress || 0,
+          error: message,
+          completed_at: now,
+        };
+        setActive(failed);
+        emit(failed);
+        setLastError(message);
+        window.setTimeout(() => setActive((value) => (value?.id === job.id ? null : value)), 9000);
+      }
+    },
+    [emit, supabase, uid],
+  );
+
+  const pump = useCallback(async () => {
+    if (!supabase || running.current) return;
+
+    const next = await supabase
+      .from("energy_render_jobs")
+      .select("id,lead_id,video_page_id,status,progress,error,metadata,created_at,started_at,completed_at")
+      .eq("user_id", uid)
+      .eq("status", "queued")
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (next.error || !next.data) return;
+
+    const claim = await supabase
+      .from("energy_render_jobs")
+      .update({ status: "preparing", progress: 1, started_at: new Date().toISOString(), error: null })
+      .eq("id", next.data.id)
+      .eq("user_id", uid)
+      .eq("status", "queued")
+      .select("id,lead_id,video_page_id,status,progress,error,metadata,created_at,started_at,completed_at")
+      .maybeSingle();
+    if (claim.error || !claim.data) return;
+
+    running.current = true;
+    try {
+      await processJob(claim.data as Job);
+    } catch (error) {
+      console.error("CRM render queue", error);
+    } finally {
+      running.current = false;
+      await countQueue();
+      window.setTimeout(() => void pump(), 180);
+    }
+  }, [countQueue, processJob, supabase, uid]);
+
+  useEffect(() => {
+    if (!supabase) return;
+    void supabase.rpc("energy_cancel_stale_render_jobs", { p_user_id: uid, p_minutes: 30 });
+    void countQueue();
+    void pump();
+
+    const poll = window.setInterval(() => {
+      void countQueue();
+      void pump();
+    }, 1800);
+    const kick = () => {
+      void countQueue();
+      void pump();
+    };
+    window.addEventListener("walkenhorst:render-queue-kick", kick);
+    return () => {
+      window.clearInterval(poll);
+      window.removeEventListener("walkenhorst:render-queue-kick", kick);
+    };
+  }, [countQueue, pump, supabase, uid]);
+
+  const visible = Boolean(active || queued || lastMessage || lastError);
+  if (!visible) return null;
+
+  const company = String(active?.metadata?.company_name || "Video-Produktion");
+  const progress = Math.max(0, Math.min(100, active?.progress || 0));
+  const failed = active?.status === "failed";
+
+  return (
+    <aside
+      style={{
+        position: "fixed",
+        right: 20,
+        bottom: 20,
+        zIndex: 1800,
+        width: "min(390px,calc(100vw - 28px))",
+        border: "1px solid rgba(94,234,212,.18)",
+        borderRadius: 18,
+        background: "linear-gradient(145deg,rgba(7,26,43,.98),rgba(13,47,68,.98))",
+        color: "#fff",
+        boxShadow: "0 24px 70px rgba(3,15,26,.32)",
+        padding: "15px 16px 14px",
+        backdropFilter: "blur(20px)",
+      }}
+      aria-live="polite"
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span
+          style={{
+            width: 10,
+            height: 10,
+            borderRadius: 999,
+            background: failed ? "#fb7185" : active?.status === "completed" ? "#5eead4" : "#2dd4bf",
+            boxShadow: `0 0 0 5px ${failed ? "rgba(251,113,133,.12)" : "rgba(45,212,191,.12)"}`,
+          }}
+        />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <strong style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12.5 }}>
+            {failed
+              ? "Render fehlgeschlagen"
+              : active?.status === "completed"
+                ? "Video fertig"
+                : active
+                  ? "Video wird automatisch erstellt"
+                  : "Render-Queue"}
+          </strong>
+          <small style={{ display: "block", marginTop: 2, color: "#9fc1cc", fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {active ? company : lastMessage || `${queued} Videos warten`}
+          </small>
+        </div>
+        <span style={{ color: "#5eead4", fontSize: 13, fontWeight: 800 }}>
+          {active && !failed ? `${progress}%` : queued ? `${queued} queued` : ""}
+        </span>
+      </div>
+
+      {active && !failed ? (
+        <>
+          <div style={{ height: 7, marginTop: 12, borderRadius: 999, overflow: "hidden", background: "rgba(255,255,255,.09)" }}>
+            <span
+              style={{
+                display: "block",
+                height: "100%",
+                width: `${progress}%`,
+                borderRadius: 999,
+                background: "linear-gradient(90deg,#14b8a6,#5eead4)",
+                transition: "width .25s ease",
+              }}
+            />
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 7, color: "#84a6b2", fontSize: 9.5 }}>
+            <span>
+              {active.status === "queued"
+                ? "Wartet"
+                : active.status === "preparing"
+                  ? "Assets werden vorbereitet"
+                  : active.status === "uploading"
+                    ? "Video wird hochgeladen"
+                    : "Canvas + Talking Head werden gerendert"}
+            </span>
+            <span>{queued > 0 ? `+ ${queued} danach` : "Letzter Job"}</span>
+          </div>
+        </>
+      ) : null}
+
+      {failed ? (
+        <p style={{ margin: "10px 0 0", color: "#fecdd3", fontSize: 10.5, lineHeight: 1.45 }}>
+          {lastError || active?.error}
+        </p>
+      ) : null}
+    </aside>
+  );
 }
