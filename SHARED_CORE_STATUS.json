@@ -13,8 +13,16 @@
     "leadDetailWorkspace": "current-reference",
     "salesBrief": "current-reference",
     "applicationFrame": "current-reference-adapt-not-copy",
-    "studioGenericV3": "current-reference"
+    "studioGenericV3": "walkenhorst-webmotion-v3-peer-render-seam-missing"
   },
+  "blockers": [
+    {
+      "id": "studio-webmotion-v3-2026-08-27",
+      "surface": "studioGenericV3",
+      "peer": "DG-MAIN",
+      "detail": "Walkenhorst migrated its browser export core from realtime MediaRecorder/captureStream to deterministic WebMotion/WebCodecs. DG-MAIN has no lib/studio-v3-browser-render-core.ts or equivalent browser render seam that can receive the same adaptation without inventing a parallel Studio architecture. Peer status records the same blocker; runtime/customer data remain isolated."
+    }
+  ],
   "rules": [
     "Shared product improvements must be adapted to the peer instance in the same task.",
     "Never copy customer data, credentials, Supabase refs, branding, PV-specific logic or Walkenhorst-specific content into another instance.",
