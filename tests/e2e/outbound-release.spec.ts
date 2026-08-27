@@ -23,7 +23,7 @@ const authSession = {
   access_token: "qa-access-token",
   refresh_token: "qa-refresh-token",
   expires_in: 3600,
-  expires_at: 1787832000,
+  expires_at: 4102444800,
   token_type: "bearer",
   user: authUser,
 };
@@ -158,9 +158,7 @@ async function mockSupabase(page: Page, state: MockState = {}) {
       });
     }
 
-    if (path === "/auth/v1/token" && request.method() === "POST") {
-      return json(route, authSession);
-    }
+    if (path === "/auth/v1/token" && request.method() === "POST") return json(route, authSession);
     if (path === "/auth/v1/user") return json(route, authUser);
 
     if (path.startsWith("/functions/v1/")) {
