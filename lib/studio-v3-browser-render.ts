@@ -1,23 +1,182 @@
 "use client";
 
-import { StudioV3BrandKit, StudioV3Item, StudioV3LeadVariables, StudioV3Timeline, resolveStudioV3Text, studioV3ActiveItems } from "@/lib/studio-v3";
+import type { StudioV3BrandKit, StudioV3Item, StudioV3LeadVariables, StudioV3Timeline } from "@/lib/studio-v3";
+import { renderStudioV3Browser as renderCore } from "@/lib/studio-v3-browser-render-core";
 
-type Options={timeline:StudioV3Timeline;brand:StudioV3BrandKit;variables:StudioV3LeadVariables;resolveSource:(item:StudioV3Item)=>string|null;onProgress?:(value:number)=>void;signal?:AbortSignal;maxWidth?:number};
-type RenderResult={blob:Blob;format:"mp4"|"webm";mimeType:string;warnings:string[];width:number;height:number};
-type Resource={image?:HTMLImageElement;media?:HTMLMediaElement;gain?:GainNode;sourceNode?:MediaElementAudioSourceNode;url:string};
-const clamp=(n:number,min=0,max=1)=>Math.min(Math.max(n,min),max);const sleep=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
-function mime(){const candidates=["video/mp4;codecs=avc1.42E01E,mp4a.40.2","video/mp4","video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"];return candidates.find(value=>typeof MediaRecorder!=="undefined"&&MediaRecorder.isTypeSupported(value))||"video/webm"}
-function loadImage(url:string){return new Promise<HTMLImageElement>((resolve,reject)=>{const img=new Image();img.crossOrigin="anonymous";img.decoding="async";img.onload=()=>resolve(img);img.onerror=()=>reject(new Error(`Bild konnte nicht geladen werden: ${url}`));img.src=url})}
-function loadMedia(url:string,audioOnly=false){return new Promise<HTMLMediaElement>((resolve,reject)=>{const element=document.createElement(audioOnly?"audio":"video") as HTMLMediaElement;element.crossOrigin="anonymous";element.preload="auto";(element as HTMLVideoElement).playsInline=true;element.onloadedmetadata=()=>resolve(element);element.onerror=()=>reject(new Error(`Medium konnte nicht geladen werden: ${url}`));element.src=url;element.load()})}
-function state(item:StudioV3Item,timeMs:number){const base={x:item.transform.x,y:item.transform.y,scale:item.transform.scale,opacity:item.transform.opacity,scrollY:0};const frames=[...(item.keyframes||[])].sort((a,b)=>a.atMs-b.atMs);if(!frames.length)return base;let before=frames[0],after=frames[frames.length-1];for(const frame of frames){if(frame.atMs<=timeMs)before=frame;if(frame.atMs>=timeMs){after=frame;break}}const p=before===after?0:clamp((timeMs-before.atMs)/Math.max(1,after.atMs-before.atMs));const val=(key:string,fallback:number)=>{const a=Number((before as any)[key]??fallback),b=Number((after as any)[key]??a);return a+(b-a)*p};return{x:val("x",base.x),y:val("y",base.y),scale:val("scale",base.scale),opacity:val("opacity",base.opacity),scrollY:val("scrollY",0)}}
-function animation(item:StudioV3Item,timeMs:number){const local=timeMs-item.startMs,remain=item.endMs-timeMs,d=Math.max(1,item.animationDurationMs||350);let opacity=1,x=0,y=0,scale=1;const apply=(kind:string,p:number,incoming:boolean)=>{const q=clamp(p);if(kind==="fade")opacity*=q;if(kind==="slide-up")y+=(1-q)*(incoming?28:-18);if(kind==="slide-left")x+=(1-q)*(incoming?34:-22);if(kind==="zoom")scale*=.88+.12*q;if(kind==="pop")scale*=.72+.28*Math.min(1,q*1.25)};if(local<d)apply(item.animationIn||"none",local/d,true);if(remain<d)apply(item.animationOut||"none",remain/d,false);return{opacity,x,y,scale}}
-function roundRect(ctx:CanvasRenderingContext2D,x:number,y:number,w:number,h:number,r:number){const radius=Math.max(0,Math.min(r,Math.min(w,h)/2));ctx.beginPath();ctx.roundRect(x,y,w,h,radius)}
-function drawCover(ctx:CanvasRenderingContext2D,source:CanvasImageSource,x:number,y:number,w:number,h:number,sw:number,sh:number,fit="cover"){if(fit==="fill"){ctx.drawImage(source,x,y,w,h);return}const sourceRatio=sw/sh,target=w/h;let dw=w,dh=h;if((fit==="cover"&&sourceRatio>target)||(fit==="contain"&&sourceRatio<target)){dh=h;dw=h*sourceRatio}else{dw=w;dh=w/sourceRatio}if(fit==="cover"){let sx=0,sy=0,sww=sw,shh=sh;if(sourceRatio>target){sww=sh*target;sx=(sw-sww)/2}else{shh=sw/target;sy=(sh-shh)/2}ctx.drawImage(source,sx,sy,sww,shh,x,y,w,h)}else ctx.drawImage(source,x+(w-dw)/2,y+(h-dh)/2,dw,dh)}
-function wrap(ctx:CanvasRenderingContext2D,text:string,maxWidth:number){const words=text.split(/\s+/);const lines:string[]=[];let line="";for(const word of words){const test=line?`${line} ${word}`:word;if(ctx.measureText(test).width>maxWidth&&line){lines.push(line);line=word}else line=test}if(line)lines.push(line);return lines}
-function drawText(ctx:CanvasRenderingContext2D,item:StudioV3Item,brand:StudioV3BrandKit,variables:StudioV3LeadVariables,w:number,h:number){const padding=Math.min(w,h)*.08;if(item.backgroundColor){ctx.fillStyle=item.backgroundColor;roundRect(ctx,0,0,w,h,item.transform.borderRadius);ctx.fill()}if(item.borderWidth){ctx.strokeStyle=item.borderColor||brand.accentColor;ctx.lineWidth=item.borderWidth;roundRect(ctx,item.borderWidth/2,item.borderWidth/2,w-item.borderWidth,h-item.borderWidth,item.transform.borderRadius);ctx.stroke()}const text=resolveStudioV3Text(item.text||"",variables);const sub=resolveStudioV3Text(item.subtext||"",variables);const fontSize=Math.max(12,item.fontSize||40);ctx.fillStyle=item.color||brand.textColor;ctx.font=`${item.fontWeight||800} ${fontSize}px ${item.fontFamily||brand.fontHeading}`;ctx.textBaseline="middle";ctx.textAlign=item.textAlign||"left";const max=w-padding*2,lines=wrap(ctx,text,max).slice(0,4);const subSize=Math.max(11,fontSize*.56);const total=lines.length*fontSize*(item.lineHeight||1.05)+(sub?subSize*1.6:0);let y=(h-total)/2+fontSize/2;const x=item.textAlign==="center"?w/2:item.textAlign==="right"?w-padding:padding;for(const line of lines){ctx.fillText(line,x,y,max);y+=fontSize*(item.lineHeight||1.05)}if(sub){ctx.globalAlpha*=.74;ctx.font=`650 ${subSize}px ${brand.fontBody}`;ctx.fillText(sub,x,y+subSize*.65,max)}}
-async function prepare(options:Options,audio:AudioContext,destination:MediaStreamAudioDestinationNode,warnings:string[]){const resources=new Map<string,Resource>();const all=options.timeline.tracks.flatMap(track=>track.items).filter(item=>!item.hidden);for(const item of all){const url=options.resolveSource(item)||item.sourceUrl;if(!url||resources.has(item.id))continue;try{if(["image","logo","map","website"].includes(item.type)){resources.set(item.id,{image:await loadImage(url),url});continue}if(["video","presenter","audio"].includes(item.type)){const media=await loadMedia(url,item.type==="audio");const gain=audio.createGain();gain.gain.value=0;let sourceNode:MediaElementAudioSourceNode|undefined;try{sourceNode=audio.createMediaElementSource(media);sourceNode.connect(gain);gain.connect(destination)}catch{warnings.push(`${item.label}: Audio konnte nicht in den Render-Mix eingebunden werden.`)}resources.set(item.id,{media,gain,sourceNode,url})}}catch{warnings.push(`${item.label}: Asset konnte nicht geladen werden und wird im Render übersprungen.`)}}return resources}
-function mediaSize(source:HTMLImageElement|HTMLVideoElement){return source instanceof HTMLImageElement?{w:source.naturalWidth,h:source.naturalHeight}:{w:source.videoWidth,h:source.videoHeight}}
-function drawItem(ctx:CanvasRenderingContext2D,item:StudioV3Item,timeMs:number,resource:Resource|undefined,brand:StudioV3BrandKit,variables:StudioV3LeadVariables,canvasW:number,canvasH:number){const s=state(item,timeMs),a=animation(item,timeMs),x=s.x/100*canvasW,y=s.y/100*canvasH,w=item.transform.width/100*canvasW,h=item.transform.height/100*canvasH,cx=x+w/2,cy=y+h/2;ctx.save();ctx.globalAlpha=clamp(s.opacity*a.opacity);ctx.translate(cx+a.x,cy+a.y);ctx.rotate(item.transform.rotation*Math.PI/180);ctx.scale(s.scale*a.scale,s.scale*a.scale);ctx.translate(-w/2,-h/2);if(item.shadow&&item.shadow!=="none"){ctx.shadowColor="rgba(0,0,0,.28)";ctx.shadowBlur=item.shadow==="strong"?35:18;ctx.shadowOffsetY=item.shadow==="strong"?18:9}roundRect(ctx,0,0,w,h,item.transform.borderRadius);ctx.clip();if(item.type==="text"||item.type==="metric")drawText(ctx,item,brand,variables,w,h);else if(item.type==="shape"){ctx.fillStyle=item.backgroundColor||brand.accentColor;if(item.shape==="circle"){ctx.beginPath();ctx.arc(w/2,h/2,Math.min(w,h)/2,0,Math.PI*2);ctx.fill()}else ctx.fillRect(0,0,w,h)}else if(resource?.image){if(item.type==="website"){const img=resource.image;const viewRatio=w/h;const cropH=Math.min(img.naturalHeight,img.naturalWidth/viewRatio);const maxY=Math.max(0,img.naturalHeight-cropH);const sy=maxY*clamp(s.scrollY/100);ctx.drawImage(img,0,sy,img.naturalWidth,cropH,0,0,w,h)}else drawCover(ctx,resource.image,0,0,w,h,resource.image.naturalWidth,resource.image.naturalHeight,item.fit)}else if(resource?.media&&resource.media instanceof HTMLVideoElement){const size=mediaSize(resource.media);if(size.w&&size.h)drawCover(ctx,resource.media,0,0,w,h,size.w,size.h,item.fit)}ctx.restore()}
+type Options = {
+  timeline: StudioV3Timeline;
+  brand: StudioV3BrandKit;
+  variables: StudioV3LeadVariables;
+  resolveSource: (item: StudioV3Item) => string | null;
+  onProgress?: (value: number) => void;
+  signal?: AbortSignal;
+  maxWidth?: number;
+};
 
-export async function renderStudioV3Browser(options:Options):Promise<RenderResult>{if(typeof window==="undefined"||typeof MediaRecorder==="undefined")throw new Error("Dieser Browser unterstützt den lokalen Video-Renderer nicht.");const duration=Math.max(1000,options.timeline.durationMs);const ratio=options.timeline.width/options.timeline.height;const width=Math.min(options.maxWidth||1920,options.timeline.width);const height=Math.round(width/ratio);const canvas=document.createElement("canvas");canvas.width=width;canvas.height=height;const ctx=canvas.getContext("2d",{alpha:false});if(!ctx)throw new Error("Canvas konnte nicht initialisiert werden.");const audio=new AudioContext();await audio.resume();const destination=audio.createMediaStreamDestination();const warnings:string[]=[];const resources=await prepare(options,audio,destination,warnings);if(options.signal?.aborted)throw new DOMException("Render abgebrochen","AbortError");const stream=(canvas as HTMLCanvasElement).captureStream(options.timeline.fps);for(const track of destination.stream.getAudioTracks())stream.addTrack(track);const mimeType=mime();const recorder=new MediaRecorder(stream,{mimeType,videoBitsPerSecond:width>=1800?10_000_000:6_000_000,audioBitsPerSecond:160_000});const chunks:BlobPart[]=[];recorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data)};const stopped=new Promise<void>((resolve,reject)=>{recorder.onstop=()=>resolve();recorder.onerror=()=>reject(new Error("MediaRecorder konnte das Video nicht fertigstellen."))});recorder.start(1000);const started=performance.now();const mediaActive=new Map<string,boolean>();let lastReported=-1;
- try{while(true){if(options.signal?.aborted)throw new DOMException("Render abgebrochen","AbortError");const elapsed=Math.min(duration,performance.now()-started);ctx.save();ctx.fillStyle=options.timeline.backgroundColor||"#000";ctx.fillRect(0,0,width,height);ctx.restore();const active=studioV3ActiveItems(options.timeline,elapsed);const activeIds=new Set(active.map(item=>item.id));for(const [id,res] of resources){if(!res.media)continue;const item=options.timeline.tracks.flatMap(track=>track.items).find(candidate=>candidate.id===id);if(!item)continue;const isActive=activeIds.has(id);res.gain&&(res.gain.gain.value=isActive&&!item.muted?(item.volume??1):0);if(isActive){const relative=Math.max(0,(elapsed-item.startMs)/1000*(item.playbackRate||1));if(Math.abs(res.media.currentTime-relative)>.3)try{res.media.currentTime=Math.min(relative,Math.max(0,(res.media.duration||relative+.1)-.05))}catch{};res.media.playbackRate=item.playbackRate||1;if(!mediaActive.get(id)){void res.media.play().catch(()=>undefined);mediaActive.set(id,true)}}else if(mediaActive.get(id)){res.media.pause();mediaActive.set(id,false)}}for(const item of active){if(item.type==="audio")continue;drawItem(ctx,item,elapsed,resources.get(item.id),options.brand,options.variables,width,height)}const progress=Math.floor(elapsed/duration*100);if(progress!==lastReported&&progress%2===0){lastReported=progress;options.onProgress?.(progress)}if(elapsed>=duration)break;await new Promise<void>(resolve=>requestAnimationFrame(()=>resolve()))}options.onProgress?.(100);recorder.stop();await stopped;const format=mimeType.startsWith("video/mp4")?"mp4":"webm";return{blob:new Blob(chunks,{type:mimeType}),format,mimeType,warnings,width,height}}finally{for(const res of resources.values()){res.media?.pause();if(res.media)res.media.src=""}if(recorder.state!=="inactive")recorder.stop();for(const track of stream.getTracks())track.stop();await audio.close().catch(()=>undefined);await sleep(10)}}
+type RenderResult = Awaited<ReturnType<typeof renderCore>>;
+
+const ENERGY_SPRITE = "/assets/energiekosten/production-sprite.webp";
+const ENERGY_TIMINGS: Record<number, [number, number]> = {
+  1: [14200, 25200],
+  2: [25200, 36200],
+  3: [36200, 46200],
+  4: [46200, 58200],
+  5: [58200, 69200],
+  6: [69200, 82200],
+  7: [82200, 93200],
+  8: [93200, 107000],
+};
+
+function slideNumber(item: StudioV3Item) {
+  if (item.type !== "image") return null;
+  const match = String(item.label || "").match(/Energiekosten\s*·\s*(?:Clean|Original|Production)\s*·\s*(0[1-8])/i);
+  return match ? Number(match[1]) : null;
+}
+
+function normalizeTimeline(input: StudioV3Timeline) {
+  const timeline = JSON.parse(JSON.stringify(input)) as StudioV3Timeline;
+  const found = new Set<number>();
+  for (const track of timeline.tracks) for (const item of track.items) {
+    const slide = slideNumber(item);
+    if (slide) found.add(slide);
+  }
+  if (!found.size) return { timeline, energy: false };
+  if (found.size !== 8) throw new Error(`Energiekosten-Master unvollständig: ${found.size}/8 Slides gefunden.`);
+  timeline.durationMs = 107000;
+  for (const track of timeline.tracks) for (const item of track.items) {
+    if (item.type === "presenter" || item.dynamicSource === "presenter") {
+      item.startMs = 0;
+      item.endMs = 107000;
+      continue;
+    }
+    if (item.type === "website" || item.dynamicSource === "website_capture") {
+      item.startMs = 0;
+      item.endMs = 14200;
+      continue;
+    }
+    const slide = slideNumber(item);
+    if (slide && ENERGY_TIMINGS[slide]) {
+      item.startMs = ENERGY_TIMINGS[slide][0];
+      item.endMs = ENERGY_TIMINGS[slide][1];
+    }
+  }
+  return { timeline, energy: true };
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string, onTimeout?: () => void) {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const timer = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      onTimeout?.();
+      reject(new Error(message));
+    }, ms);
+    promise.then(
+      (value) => { if (!settled) { settled = true; window.clearTimeout(timer); resolve(value); } },
+      (error) => { if (!settled) { settled = true; window.clearTimeout(timer); reject(error); } },
+    );
+  });
+}
+
+function loadImage(url: string, ms = 15000) {
+  return withTimeout(new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.decoding = "async";
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error(`Bild nicht erreichbar: ${url}`));
+    image.src = url;
+  }), ms, `Bild-Asset Timeout nach ${Math.round(ms / 1000)} Sekunden.`);
+}
+
+function loadMedia(url: string, ms = 30000) {
+  return withTimeout(new Promise<void>((resolve, reject) => {
+    const video = document.createElement("video");
+    video.crossOrigin = "anonymous";
+    video.preload = "metadata";
+    video.playsInline = true;
+    const clean = () => { video.onloadedmetadata = null; video.onerror = null; video.removeAttribute("src"); try { video.load(); } catch {} };
+    video.onloadedmetadata = () => { clean(); resolve(); };
+    video.onerror = () => { clean(); reject(new Error(`Video nicht erreichbar: ${url}`)); };
+    video.src = url;
+    video.load();
+  }), ms, `Video-Asset Timeout nach ${Math.round(ms / 1000)} Sekunden.`);
+}
+
+function canvasBlob(canvas: HTMLCanvasElement) {
+  return new Promise<Blob>((resolve, reject) => canvas.toBlob(
+    (blob) => blob ? resolve(blob) : reject(new Error("Slide konnte nicht vorbereitet werden.")),
+    "image/webp",
+    .92,
+  ));
+}
+
+async function buildEnergySlides() {
+  const sprite = await loadImage(ENERGY_SPRITE, 15000);
+  if (sprite.naturalWidth !== 2560 || sprite.naturalHeight !== 2880) {
+    throw new Error(`Energiekosten-Produktionsgrafik ungültig: ${sprite.naturalWidth}×${sprite.naturalHeight}.`);
+  }
+  const urls = new Map<number, string>();
+  for (let slide = 1; slide <= 8; slide++) {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1280;
+    canvas.height = 720;
+    const ctx = canvas.getContext("2d", { alpha: false });
+    if (!ctx) throw new Error(`Slide ${slide}: Canvas konnte nicht erstellt werden.`);
+    const index = slide - 1;
+    ctx.drawImage(sprite, (index % 2) * 1280, Math.floor(index / 2) * 720, 1280, 720, 0, 0, 1280, 720);
+    const blob = await canvasBlob(canvas);
+    urls.set(slide, URL.createObjectURL(blob));
+  }
+  return urls;
+}
+
+async function preflight(timeline: StudioV3Timeline, resolveSource: (item: StudioV3Item) => string | null) {
+  const unique = new Map<string, StudioV3Item>();
+  for (const item of timeline.tracks.flatMap((track) => track.items).filter((item) => !item.hidden)) {
+    const url = resolveSource(item) || item.sourceUrl;
+    const critical = ["image", "website", "video", "presenter"].includes(item.type);
+    if (!url) {
+      if (critical) throw new Error(`${item.label || item.type}: erforderliches Asset fehlt.`);
+      continue;
+    }
+    if (!unique.has(url)) unique.set(url, item);
+  }
+  await Promise.all(Array.from(unique.entries()).map(async ([url, item]) => {
+    try {
+      if (["video", "presenter"].includes(item.type)) await loadMedia(url);
+      else if (["image", "website", "logo", "map"].includes(item.type)) await loadImage(url);
+    } catch (error) {
+      throw new Error(`${item.label || item.type}: ${error instanceof Error ? error.message : "Asset konnte nicht geladen werden."}`);
+    }
+  }));
+}
+
+export async function renderStudioV3Browser(options: Options): Promise<RenderResult> {
+  const { timeline, energy } = normalizeTimeline(options.timeline);
+  const slideUrls = energy ? await buildEnergySlides() : new Map<number, string>();
+  const resolveSource = (item: StudioV3Item) => {
+    const slide = energy ? slideNumber(item) : null;
+    if (slide && slideUrls.has(slide)) return slideUrls.get(slide) || null;
+    return options.resolveSource(item);
+  };
+  const controller = new AbortController();
+  const forwardAbort = () => controller.abort();
+  options.signal?.addEventListener("abort", forwardAbort, { once: true });
+  try {
+    options.onProgress?.(0);
+    await preflight(timeline, resolveSource);
+    if (controller.signal.aborted || options.signal?.aborted) throw new DOMException("Render abgebrochen", "AbortError");
+    const deadline = Math.max(180000, timeline.durationMs * 2.5);
+    return await withTimeout(
+      renderCore({ ...options, timeline, resolveSource, signal: controller.signal }),
+      deadline,
+      `Video-Render Timeout nach ${Math.round(deadline / 1000)} Sekunden.`,
+      () => controller.abort(),
+    );
+  } finally {
+    options.signal?.removeEventListener("abort", forwardAbort);
+    for (const url of slideUrls.values()) URL.revokeObjectURL(url);
+  }
+}
