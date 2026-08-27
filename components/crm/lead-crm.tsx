@@ -10,449 +10,88 @@ type CustomerType = "commercial" | "private";
 type LeadStatus = "new" | "research" | "ready" | "contacted" | "engaged" | "qualified" | "meeting" | "proposal" | "won" | "lost" | "nurture";
 
 type Lead = {
-  id: string;
-  company_name: string;
-  contact_name: string | null;
-  email: string | null;
-  phone: string | null;
-  website: string | null;
-  city: string | null;
-  postcode: string | null;
-  address: string | null;
-  industry: string | null;
-  status: LeadStatus;
-  customer_type: CustomerType;
-  total_score: number;
-  intent_score: number;
-  next_action: string | null;
-  next_action_at: string | null;
-  do_not_contact: boolean;
-  updated_at: string;
+  id:string; company_name:string; contact_name:string|null; email:string|null; phone:string|null; website:string|null; city:string|null; postcode:string|null; address:string|null; industry:string|null;
+  status:LeadStatus; customer_type:CustomerType; total_score:number; intent_score:number; next_action:string|null; next_action_at:string|null; do_not_contact:boolean; updated_at:string;
 };
-
-const STATUS_LABEL: Record<LeadStatus, string> = {
-  new: "Neu",
-  research: "Research",
-  ready: "Bereit",
-  contacted: "Kontaktiert",
-  engaged: "Interessiert",
-  qualified: "Qualifiziert",
-  meeting: "Termin",
-  proposal: "Angebot",
-  won: "Gewonnen",
-  lost: "Verloren",
-  nurture: "Wiedervorlage",
+type Workflow = {
+  lead_id:string; contact_count:number; enrichment_status:string|null; page_ready:boolean; video_ready:boolean; email_draft_ready:boolean; email_reviewed:boolean; email_sent:boolean;
+  email_opened:boolean; email_clicked:boolean; page_viewed:boolean; video_played:boolean; max_watch_percent:number; cta_clicked:boolean; replied:boolean;
+  workflow_stage:number; workflow_stage_label:string; recommended_action:string|null; workflow_percent:number; video_page_slug:string|null; rendered_video_url:string|null;
 };
+type CrmRow = Lead & { workflow?:Workflow };
 
-const STATUS_OPTIONS = Object.entries(STATUS_LABEL) as Array<[LeadStatus, string]>;
-const PAGE_SIZE = 40;
-const LEAD_FIELDS = "id,company_name,contact_name,email,phone,website,city,postcode,address,industry,status,customer_type,total_score,intent_score,next_action,next_action_at,do_not_contact,updated_at";
+const STATUS_LABEL:Record<LeadStatus,string>={new:"Neu",research:"Research",ready:"Bereit",contacted:"Kontaktiert",engaged:"Interessiert",qualified:"Qualifiziert",meeting:"Termin",proposal:"Angebot",won:"Gewonnen",lost:"Verloren",nurture:"Wiedervorlage"};
+const STATUS_OPTIONS=Object.entries(STATUS_LABEL) as Array<[LeadStatus,string]>;
+const PAGE_SIZE=35;
+const LEAD_FIELDS="id,company_name,contact_name,email,phone,website,city,postcode,address,industry,status,customer_type,total_score,intent_score,next_action,next_action_at,do_not_contact,updated_at";
+const FLOW_FIELDS="lead_id,contact_count,enrichment_status,page_ready,video_ready,email_draft_ready,email_reviewed,email_sent,email_opened,email_clicked,page_viewed,video_played,max_watch_percent,cta_clicked,replied,workflow_stage,workflow_stage_label,recommended_action,workflow_percent,video_page_slug,rendered_video_url";
+const FLOW_STEPS=["Lead","Enrichment","Landingpage","Video","Entwurf","Prüfung","Versand","Engagement"];
 
-function formatDate(value: string | null | undefined) {
-  if (!value) return "—";
-  try {
-    return new Intl.DateTimeFormat("de-DE", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
-  } catch {
-    return "—";
-  }
-}
+function formatDate(value:string|null|undefined){if(!value)return"—";try{return new Intl.DateTimeFormat("de-DE",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}).format(new Date(value))}catch{return"—"}}
+function initials(value:string){return value.split(/\s+/).filter(Boolean).slice(0,2).map(p=>p[0]?.toUpperCase()).join("")||"WH"}
+function searchable(row:CrmRow){return[row.company_name,row.contact_name,row.email,row.phone,row.website,row.city,row.postcode,row.address,row.industry,row.next_action,STATUS_LABEL[row.status],row.workflow?.workflow_stage_label,row.workflow?.recommended_action].filter(Boolean).join(" ").toLowerCase()}
+function stageIndex(w?:Workflow){if(!w)return 0;return Math.max(0,Math.min(7,Number(w.workflow_stage||1)-1))}
+function hasGateProblem(row:CrmRow){const w=row.workflow;return Boolean(w?.email_sent&&!w.video_ready)||Boolean(row.do_not_contact&&w?.email_sent)}
+function engagement(row:CrmRow){const w=row.workflow;if(!w)return{label:"Noch kein Signal",tone:"muted",value:"—"};if(w.replied)return{label:"Antwort erhalten",tone:"hot",value:"Reply"};if(w.cta_clicked)return{label:"CTA geklickt",tone:"hot",value:"CTA"};if((w.max_watch_percent||0)>=90)return{label:"Video fast komplett",tone:"hot",value:`${w.max_watch_percent}%`};if((w.max_watch_percent||0)>=50)return{label:"Video angesehen",tone:"warm",value:`${w.max_watch_percent}%`};if(w.video_played)return{label:"Video gestartet",tone:"warm",value:"Play"};if(w.page_viewed)return{label:"Landingpage besucht",tone:"warm",value:"View"};if(w.email_clicked)return{label:"Mail-Link geklickt",tone:"warm",value:"Click"};if(w.email_opened)return{label:"E-Mail geöffnet",tone:"cool",value:"Open"};return{label:"Noch kein Signal",tone:"muted",value:"—"}}
+function nextAction(row:CrmRow){if(hasGateProblem(row))return"Versand prüfen";return row.workflow?.recommended_action||row.next_action||"Lead prüfen"}
 
-function datetimeLocal(value: string | null | undefined) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
-}
+function SearchIcon(){return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>}
+function PlusIcon(){return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>}
+function ArrowIcon(){return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>}
 
-function initials(value: string) {
-  return value.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "WH";
-}
+export function LeadCrm({customerType}:{customerType:CustomerType}){
+  const router=useRouter();
+  const supabase=useMemo(()=>createSupabaseBrowserClient(),[]);
+  const searchRef=useRef<HTMLInputElement|null>(null);
+  const[userId,setUserId]=useState<string|null>(null);const[rows,setRows]=useState<CrmRow[]>([]);const[selected,setSelected]=useState<Set<string>>(new Set());
+  const[search,setSearch]=useState("");const deferredSearch=useDeferredValue(search);const[statusFilter,setStatusFilter]=useState<"all"|LeadStatus>("all");const[stageFilter,setStageFilter]=useState("all");
+  const[page,setPage]=useState(0);const[loading,setLoading]=useState(true);const[busy,setBusy]=useState(false);const[error,setError]=useState<string|null>(null);const[notice,setNotice]=useState<string|null>(null);const[createOpen,setCreateOpen]=useState(false);
+  const isCommercial=customerType==="commercial";const label=isCommercial?"Gewerbe CRM":"Privatkunden CRM";const singular=isCommercial?"Gewerbe-Lead":"Privatkunden-Lead";
 
-function searchableLead(lead: Lead) {
-  return [
-    lead.company_name,
-    lead.contact_name,
-    lead.email,
-    lead.phone,
-    lead.website,
-    lead.city,
-    lead.postcode,
-    lead.address,
-    lead.industry,
-    lead.next_action,
-    STATUS_LABEL[lead.status],
-    lead.status,
-  ].filter(Boolean).join(" ").toLowerCase();
-}
+  const load=useCallback(async()=>{if(!supabase)return;setLoading(true);setError(null);try{const session=(await supabase.auth.getSession()).data.session;if(!session)throw new Error("Session abgelaufen. Bitte neu anmelden.");setUserId(session.user.id);
+    const leadsPromise=supabase.from("energy_leads").select(LEAD_FIELDS).eq("user_id",session.user.id).eq("customer_type",customerType).order("updated_at",{ascending:false}).limit(1200);
+    const flowPromise=supabase.from("energy_crm_lead_workflow").select(FLOW_FIELDS).eq("user_id",session.user.id).limit(2500);
+    const[leadResult,flowResult]=await Promise.all([leadsPromise,flowPromise]);if(leadResult.error)throw leadResult.error;
+    const flowMap=new Map<string,Workflow>();if(!flowResult.error)for(const item of(flowResult.data||[]) as Workflow[])flowMap.set(item.lead_id,item);
+    setRows(((leadResult.data||[]) as Lead[]).map(lead=>({...lead,workflow:flowMap.get(lead.id)})));setSelected(new Set());
+  }catch(e){setError(e instanceof Error?e.message:"CRM konnte nicht geladen werden.")}finally{setLoading(false)}},[customerType,supabase]);
+  useEffect(()=>{void load()},[load]);useEffect(()=>setPage(0),[deferredSearch,statusFilter,stageFilter]);
+  useEffect(()=>{const onKey=(event:KeyboardEvent)=>{const target=event.target as HTMLElement|null;if(event.key==="/"&&!event.metaKey&&!event.ctrlKey&&!event.altKey&&!['INPUT','TEXTAREA','SELECT'].includes(target?.tagName||"")){event.preventDefault();searchRef.current?.focus()}};window.addEventListener("keydown",onKey);return()=>window.removeEventListener("keydown",onKey)},[]);
 
-export function LeadCrm({ customerType }: { customerType: CustomerType }) {
-  const router = useRouter();
-  const supabase = useMemo(() => createSupabaseBrowserClient(), []);
-  const searchRef = useRef<HTMLInputElement | null>(null);
-  const [userId, setUserId] = useState<string | null>(null);
-  const [rows, setRows] = useState<Lead[]>([]);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [search, setSearch] = useState("");
-  const deferredSearch = useDeferredValue(search);
-  const [statusFilter, setStatusFilter] = useState<"all" | LeadStatus>("all");
-  const [page, setPage] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [bulkOpen, setBulkOpen] = useState(false);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [quickLeadId, setQuickLeadId] = useState<string | null>(null);
+  const filtered=useMemo(()=>{const q=deferredSearch.trim().toLowerCase();return rows.filter(row=>{if(statusFilter!=="all"&&row.status!==statusFilter)return false;if(stageFilter!=="all"&&String(stageIndex(row.workflow))!==stageFilter)return false;return!q||searchable(row).includes(q)})},[rows,deferredSearch,statusFilter,stageFilter]);
+  const sorted=useMemo(()=>[...filtered].sort((a,b)=>{const ah=hasGateProblem(a)?10000:0,bh=hasGateProblem(b)?10000:0;const ae=engagement(a).tone==="hot"?4000:engagement(a).tone==="warm"?2000:0;const be=engagement(b).tone==="hot"?4000:engagement(b).tone==="warm"?2000:0;return(bh+be+b.intent_score)-(ah+ae+a.intent_score)}),[filtered]);
+  const pageCount=Math.max(1,Math.ceil(sorted.length/PAGE_SIZE)),safePage=Math.min(page,pageCount-1),visible=sorted.slice(safePage*PAGE_SIZE,safePage*PAGE_SIZE+PAGE_SIZE);
+  const metrics=useMemo(()=>rows.reduce((a,row)=>{const w=row.workflow;a.enrichment+=!w||!w.enrichment_status||w.enrichment_status==="pending"?1:0;a.production+=w?.page_ready&&w?.video_ready?1:0;a.review+=w?.email_draft_ready&&!w?.email_reviewed?1:0;a.hot+=row.intent_score>=70||engagement(row).tone==="hot"?1:0;a.risk+=hasGateProblem(row)?1:0;return a},{enrichment:0,production:0,review:0,hot:0,risk:0}),[rows]);
+  const priority=useMemo(()=>sorted.filter(r=>hasGateProblem(r)||engagement(r).tone==="hot"||r.intent_score>=70).slice(0,4),[sorted]);
+  const allVisibleSelected=visible.length>0&&visible.every(row=>selected.has(row.id));
+  function toggle(id:string){setSelected(current=>{const next=new Set(current);next.has(id)?next.delete(id):next.add(id);return next})}
+  function toggleVisible(){setSelected(current=>{const next=new Set(current);visible.forEach(row=>allVisibleSelected?next.delete(row.id):next.add(row.id));return next})}
 
-  const isCommercial = customerType === "commercial";
-  const label = isCommercial ? "Gewerbekunden" : "Privatkunden";
-  const singular = isCommercial ? "Gewerbe-Lead" : "Privatkunden-Lead";
+  async function createLead(event:FormEvent<HTMLFormElement>){event.preventDefault();if(!supabase||!userId)return;const f=new FormData(event.currentTarget);const company=String(f.get("company_name")||"").trim();const contact=String(f.get("contact_name")||"").trim();const displayName=isCommercial?company:contact;if(!displayName){setError(isCommercial?"Unternehmensname fehlt.":"Name fehlt.");return}
+    const website=String(f.get("website")||"").trim()||null,city=String(f.get("city")||"").trim()||null,industry=isCommercial?(String(f.get("industry")||"").trim()||null):"Privathaushalt",email=String(f.get("email")||"").trim().toLowerCase()||null,phone=String(f.get("phone")||"").trim()||null;
+    const scores=scoreEnergyLead({company_name:displayName,website,city,industry,employees:null,location_count:1,roof_area_m2:null,annual_energy_kwh:null,pv_present:null,contact_name:contact||null,phone,email});setBusy(true);setError(null);
+    try{const insert=await supabase.from("energy_leads").insert({user_id:userId,customer_type:customerType,company_name:displayName,contact_name:contact||(isCommercial?null:displayName),email,phone,website,city,postcode:String(f.get("postcode")||"").trim()||null,address:String(f.get("address")||"").trim()||null,industry,source:"manual",pv_score:scores.pvScore,energy_score:scores.energyScore,intent_score:scores.intentScore,contactability_score:scores.contactabilityScore,total_score:scores.totalScore,summary:scores.summary,pitch:scores.pitch,next_action:scores.nextAction,status:"research"}).select("id").single();if(insert.error)throw insert.error;setCreateOpen(false);setNotice(`${singular} angelegt – nächster Schritt: Enrichment.`);router.push(`/leads/${insert.data.id}`)}catch(e){setError(e instanceof Error?e.message:"Lead konnte nicht angelegt werden.")}finally{setBusy(false)}}
+  async function deleteSelected(){if(!supabase||!userId||!selected.size)return;if(!window.confirm(`${selected.size} Leads endgültig löschen?`))return;setBusy(true);try{const r=await supabase.from("energy_leads").delete().eq("user_id",userId).in("id",Array.from(selected));if(r.error)throw r.error;setNotice(`${selected.size} Leads gelöscht.`);await load()}catch(e){setError(e instanceof Error?e.message:"Löschen fehlgeschlagen.")}finally{setBusy(false)}}
 
-  const load = useCallback(async () => {
-    if (!supabase) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const session = (await supabase.auth.getSession()).data.session;
-      if (!session) throw new Error("Session abgelaufen. Bitte neu anmelden.");
-      setUserId(session.user.id);
-      const result = await supabase
-        .from("energy_leads")
-        .select(LEAD_FIELDS)
-        .eq("user_id", session.user.id)
-        .eq("customer_type", customerType)
-        .order("updated_at", { ascending: false })
-        .limit(750);
-      if (result.error) throw result.error;
-      setRows((result.data || []) as Lead[]);
-      setSelected(new Set());
-      setPage(0);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "CRM konnte nicht geladen werden.");
-    } finally {
-      setLoading(false);
-    }
-  }, [customerType, supabase]);
-
-  useEffect(() => { void load(); }, [load]);
-  useEffect(() => { setPage(0); }, [deferredSearch, statusFilter]);
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey && target?.tagName !== "INPUT" && target?.tagName !== "TEXTAREA" && target?.tagName !== "SELECT") {
-        event.preventDefault();
-        searchRef.current?.focus();
-      }
-      if (event.key === "Escape" && quickLeadId) setQuickLeadId(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [quickLeadId]);
-
-  const filtered = useMemo(() => {
-    const q = deferredSearch.trim().toLowerCase();
-    return rows.filter((lead) => {
-      if (statusFilter !== "all" && lead.status !== statusFilter) return false;
-      return !q || searchableLead(lead).includes(q);
-    });
-  }, [rows, deferredSearch, statusFilter]);
-
-  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const safePage = Math.min(page, pageCount - 1);
-  const visibleRows = useMemo(() => filtered.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE), [filtered, safePage]);
-  const selectedRows = useMemo(() => rows.filter((lead) => selected.has(lead.id)), [rows, selected]);
-  const quickLead = useMemo(() => rows.find((lead) => lead.id === quickLeadId) || null, [rows, quickLeadId]);
-  const metrics = useMemo(() => rows.reduce((acc, lead) => {
-    acc.contactable += !lead.do_not_contact && Boolean(lead.email || lead.phone) ? 1 : 0;
-    acc.hot += lead.intent_score >= 70 || lead.status === "engaged" || lead.status === "qualified" ? 1 : 0;
-    acc.actionDue += lead.next_action_at && new Date(lead.next_action_at).getTime() <= Date.now() ? 1 : 0;
-    return acc;
-  }, { contactable: 0, hot: 0, actionDue: 0 }), [rows]);
-  const allVisibleSelected = visibleRows.length > 0 && visibleRows.every((lead) => selected.has(lead.id));
-  const rangeStart = filtered.length ? safePage * PAGE_SIZE + 1 : 0;
-  const rangeEnd = Math.min(filtered.length, safePage * PAGE_SIZE + PAGE_SIZE);
-
-  function toggle(id: string) {
-    setSelected((current) => {
-      const next = new Set(current);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  }
-
-  function toggleVisible() {
-    setSelected((current) => {
-      const next = new Set(current);
-      if (allVisibleSelected) visibleRows.forEach((lead) => next.delete(lead.id));
-      else visibleRows.forEach((lead) => next.add(lead.id));
-      return next;
-    });
-  }
-
-  async function quickEdit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!supabase || !userId || !quickLead) return;
-    const form = new FormData(event.currentTarget);
-    const nextAt = String(form.get("next_action_at") || "").trim();
-    const payload = {
-      contact_name: String(form.get("contact_name") || "").trim() || null,
-      email: String(form.get("email") || "").trim().toLowerCase() || null,
-      phone: String(form.get("phone") || "").trim() || null,
-      status: String(form.get("status") || quickLead.status) as LeadStatus,
-      next_action: String(form.get("next_action") || "").trim() || null,
-      next_action_at: nextAt ? new Date(nextAt).toISOString() : null,
-      industry: isCommercial ? (String(form.get("industry") || "").trim() || null) : quickLead.industry,
-      city: String(form.get("city") || "").trim() || null,
-      do_not_contact: String(form.get("do_not_contact") || "no") === "yes",
-      updated_at: new Date().toISOString(),
-    };
-    setBusy(true); setError(null); setNotice(null);
-    try {
-      const result = await supabase.from("energy_leads").update(payload).eq("user_id", userId).eq("id", quickLead.id).select(LEAD_FIELDS).single();
-      if (result.error) throw result.error;
-      const updated = result.data as Lead;
-      setRows((current) => current.map((lead) => lead.id === updated.id ? updated : lead));
-      setNotice(`${updated.company_name} wurde aktualisiert.`);
-      setQuickLeadId(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Schnellbearbeitung fehlgeschlagen.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function bulkEdit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!supabase || !userId || selected.size === 0) return;
-    const form = new FormData(event.currentTarget);
-    const payload: Record<string, unknown> = { updated_at: new Date().toISOString() };
-    const status = String(form.get("status") || "");
-    const type = String(form.get("customer_type") || "");
-    const industry = String(form.get("industry") || "").trim();
-    const nextAction = String(form.get("next_action") || "").trim();
-    const dnc = String(form.get("dnc") || "");
-    if (status) payload.status = status;
-    if (type) payload.customer_type = type;
-    if (industry) payload.industry = industry;
-    if (nextAction) payload.next_action = nextAction;
-    if (dnc === "yes") payload.do_not_contact = true;
-    if (dnc === "no") payload.do_not_contact = false;
-    if (Object.keys(payload).length === 1) {
-      setError("Wähle mindestens eine Änderung aus.");
-      return;
-    }
-    setBusy(true); setError(null); setNotice(null);
-    try {
-      const ids = Array.from(selected);
-      const result = await supabase.from("energy_leads").update(payload).eq("user_id", userId).in("id", ids);
-      if (result.error) throw result.error;
-      setNotice(`${ids.length} Leads wurden aktualisiert.`);
-      setBulkOpen(false);
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Mehrfachbearbeitung fehlgeschlagen.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function deleteSelected() {
-    if (!supabase || !userId || selected.size === 0) return;
-    const ids = Array.from(selected);
-    const ok = window.confirm(`${ids.length} ausgewählte Leads endgültig löschen? Zugehörige CRM-Aktivitäten, Follow-ups, Nachrichten und Studio-Daten können dabei ebenfalls entfernt werden.`);
-    if (!ok) return;
-    setBusy(true); setError(null); setNotice(null);
-    try {
-      const result = await supabase.from("energy_leads").delete().eq("user_id", userId).in("id", ids);
-      if (result.error) throw result.error;
-      setNotice(`${ids.length} Leads wurden gelöscht.`);
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Löschen fehlgeschlagen.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function createLead(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!supabase || !userId) return;
-    const form = new FormData(event.currentTarget);
-    const company = String(form.get("company_name") || "").trim();
-    const contact = String(form.get("contact_name") || "").trim();
-    const displayName = isCommercial ? company : contact;
-    if (!displayName) { setError(isCommercial ? "Unternehmensname fehlt." : "Name fehlt."); return; }
-    const website = String(form.get("website") || "").trim() || null;
-    const city = String(form.get("city") || "").trim() || null;
-    const industry = isCommercial ? (String(form.get("industry") || "").trim() || null) : "Privathaushalt";
-    const email = String(form.get("email") || "").trim() || null;
-    const phone = String(form.get("phone") || "").trim() || null;
-    const scores = scoreEnergyLead({ company_name: displayName, website, city, industry, employees: null, location_count: 1, roof_area_m2: null, annual_energy_kwh: null, pv_present: null, contact_name: contact || null, phone, email });
-    setBusy(true); setError(null); setNotice(null);
-    try {
-      const insert = await supabase.from("energy_leads").insert({
-        user_id: userId,
-        customer_type: customerType,
-        company_name: displayName,
-        contact_name: contact || (isCommercial ? null : displayName),
-        email,
-        phone,
-        website,
-        city,
-        postcode: String(form.get("postcode") || "").trim() || null,
-        address: String(form.get("address") || "").trim() || null,
-        industry,
-        source: "manual",
-        pv_score: scores.pvScore,
-        energy_score: scores.energyScore,
-        intent_score: scores.intentScore,
-        contactability_score: scores.contactabilityScore,
-        total_score: scores.totalScore,
-        summary: scores.summary,
-        pitch: scores.pitch,
-        next_action: scores.nextAction,
-        status: scores.totalScore >= 75 ? "ready" : "research",
-      }).select("id").single();
-      if (insert.error) throw insert.error;
-      setCreateOpen(false);
-      setNotice(`${singular} wurde angelegt.`);
-      await load();
-      router.push(`/leads/${insert.data.id}`);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Lead konnte nicht angelegt werden.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (loading) {
-    return <div className={styles.root}>
-      <div className={styles.loaderTop}><span /></div>
-      <div className={styles.heroSkeleton}><div/><div/><div/></div>
-      <div className={styles.skeletonGrid}>{Array.from({ length: 8 }).map((_, i) => <div className={styles.skeletonRow} key={i} />)}</div>
-    </div>;
-  }
-
+  if(loading)return <div className={styles.root}><div className={styles.loadingBar}/><div className={styles.loadingHero}/><div className={styles.loadingGrid}>{Array.from({length:9}).map((_,i)=><div key={i}/>)}</div></div>;
   return <div className={styles.root}>
-    {busy ? <div className={styles.loaderTop}><span /></div> : null}
-    <header className={styles.hero}>
-      <div>
-        <div className={styles.eyebrow}>Walkenhorst CRM · {isCommercial ? "B2B" : "B2C"}</div>
-        <h1>{label}</h1>
-        <p>{isCommercial ? "Unternehmen, Ansprechpartner und gewerbliche Energie-Opportunities zentral steuern." : "Private Interessenten, Haushalte und Energieoptimierungs-Anfragen sauber getrennt verwalten."}</p>
-      </div>
-      <button className={styles.primary} type="button" onClick={() => setCreateOpen(true)}>+ {singular}</button>
-    </header>
-
-    <section className={styles.commandSearch}>
-      <span className={styles.searchIcon}>⌕</span>
-      <div>
-        <strong>Alles durchsuchen</strong>
-        <input ref={searchRef} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Unternehmen, Name, E-Mail, Telefon, Ort, Branche, Website, nächste Aktion …" />
-      </div>
-      {search ? <button type="button" onClick={() => setSearch("")} aria-label="Suche leeren">×</button> : <kbd>/</kbd>}
-    </section>
-
+    {busy?<div className={styles.loadingBar}/>:null}
+    <header className={styles.hero}><div><div className={styles.eyebrow}>Walkenhorst · Energy Sales OS</div><h1>{label}</h1><p>{isCommercial?"Jeder Lead durchläuft einen klaren Produktions- und Vertriebsprozess – vom Enrichment bis zum Engagement.":"Private Kontakte mit klarer Priorität, nächster Aktion und vollständiger Kommunikationshistorie."}</p></div><button className={styles.primary} onClick={()=>setCreateOpen(true)}><PlusIcon/>Lead anlegen</button></header>
     <section className={styles.kpis}>
-      <div><span>Leads</span><strong>{rows.length}</strong><small>in diesem CRM</small></div>
-      <div><span>Kontaktierbar</span><strong>{metrics.contactable}</strong><small>E-Mail oder Telefon</small></div>
-      <div><span>Hot</span><strong>{metrics.hot}</strong><small>hoher Intent</small></div>
-      <div><span>Aktion fällig</span><strong>{metrics.actionDue}</strong><small>heute / überfällig</small></div>
+      <article><span>Leads</span><strong>{rows.length}</strong><small>gesamt</small></article><article><span>Enrichment offen</span><strong>{metrics.enrichment}</strong><small>Recherche fehlt</small></article><article><span>Produktionsbereit</span><strong>{metrics.production}</strong><small>LP + Render</small></article><article><span>Prüfung offen</span><strong>{metrics.review}</strong><small>Entwürfe</small></article><article className={styles.hotKpi}><span>Hot / Signal</span><strong>{metrics.hot}</strong><small>priorisieren</small></article>
     </section>
+    {metrics.risk>0?<div className={styles.riskBanner}><strong>{metrics.risk} Prozessfehler erkannt</strong><span>Mindestens ein Lead wurde versendet, obwohl ein Produktions-Gate nicht grün war. Diese Fälle stehen ganz oben.</span></div>:null}
+    {error?<div className={styles.error}>{error}</div>:null}{notice?<div className={styles.notice}>{notice}</div>:null}
 
-    {error ? <div className={styles.error}>{error}</div> : null}
-    {notice ? <div className={styles.notice}>{notice}</div> : null}
+    {priority.length?<section className={styles.priority}><div className={styles.sectionHead}><div><span>Smart Queue</span><h2>Heute zuerst bearbeiten</h2></div><small>sortiert nach Risiko, Engagement und Intent</small></div><div className={styles.priorityGrid}>{priority.map(row=>{const e=engagement(row);return <button key={row.id} onClick={()=>router.push(`/leads/${row.id}`)}><div className={styles.priorityTop}><span className={styles.avatar}>{initials(row.company_name)}</span><span className={`${styles.signal} ${styles[e.tone]}`}>{e.value}</span></div><strong>{row.company_name}</strong><small>{nextAction(row)}</small><div className={styles.priorityFoot}><span>{row.intent_score} Intent</span><ArrowIcon/></div></button>})}</div></section>:null}
 
     <section className={styles.card}>
-      <div className={styles.toolbar}>
-        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "all" | LeadStatus)} aria-label="Status filtern">
-          <option value="all">Alle Status</option>
-          {STATUS_OPTIONS.map(([value, name]) => <option value={value} key={value}>{name}</option>)}
-        </select>
-        <span className={styles.resultCount}>{filtered.length} Ergebnisse</span>
-        <div className={styles.toolbarSpacer}/>
-        {deferredSearch !== search ? <span className={styles.searching}>Suche …</span> : <span className={styles.tableHint}>Lead anklicken für Schnellbearbeitung</span>}
-      </div>
-
-      {selected.size > 0 ? <div className={styles.bulkBar}>
-        <div><strong>{selected.size}</strong><span> ausgewählt</span></div>
-        <button type="button" onClick={() => setBulkOpen(true)}>Mehrfach bearbeiten</button>
-        <button type="button" onClick={() => { setSelected(new Set()); }}>Auswahl aufheben</button>
-        <button type="button" className={styles.danger} onClick={() => void deleteSelected()}>Löschen</button>
-      </div> : null}
-
-      <div className={styles.tableWrap}>
-        <table className={styles.table}>
-          <thead><tr>
-            <th className={styles.checkCol}><input aria-label="Alle sichtbaren Leads auswählen" type="checkbox" checked={allVisibleSelected} onChange={toggleVisible}/></th>
-            <th>{isCommercial ? "Unternehmen" : "Kontakt"}</th><th>Kontakt</th><th>Status</th><th>Opportunity</th><th>Nächster Schritt</th><th>Aktualisiert</th>
-          </tr></thead>
-          <tbody>{visibleRows.map((lead) => <tr key={lead.id} onClick={() => setQuickLeadId(lead.id)} tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setQuickLeadId(lead.id); } }}>
-            <td className={styles.checkCol} onClick={(e) => e.stopPropagation()}><input aria-label={`${lead.company_name} auswählen`} type="checkbox" checked={selected.has(lead.id)} onChange={() => toggle(lead.id)}/></td>
-            <td><div className={styles.identity}><span>{initials(lead.company_name)}</span><div><strong>{lead.company_name}</strong><small>{[isCommercial ? lead.contact_name : lead.city, lead.industry].filter(Boolean).join(" · ") || "Noch nicht angereichert"}</small></div></div></td>
-            <td><div className={styles.contact}><strong>{lead.email || lead.phone || "—"}</strong><small>{lead.email && lead.phone ? lead.phone : [lead.postcode, lead.city].filter(Boolean).join(" ")}</small></div></td>
-            <td><span className={`${styles.status} ${styles[`status_${lead.status}`] || ""}`}>{STATUS_LABEL[lead.status] || lead.status}</span></td>
-            <td><div className={styles.score}><strong>{lead.total_score}</strong><span>/ 100</span></div></td>
-            <td><div className={styles.next}><strong>{lead.next_action || "Noch offen"}</strong><small>{formatDate(lead.next_action_at)}</small></div></td>
-            <td><span className={styles.date}>{formatDate(lead.updated_at)}</span></td>
-          </tr>)}</tbody>
-        </table>
-        {!filtered.length ? <div className={styles.empty}><strong>Keine Leads gefunden.</strong><span>Passe Suche oder Filter an.</span></div> : null}
-      </div>
-
-      {filtered.length > 0 ? <footer className={styles.pagination}>
-        <span>{rangeStart}–{rangeEnd} von {filtered.length}</span>
-        <div>
-          <button type="button" disabled={safePage === 0} onClick={() => setPage((value) => Math.max(0, value - 1))}>← Zurück</button>
-          <strong>{safePage + 1} / {pageCount}</strong>
-          <button type="button" disabled={safePage >= pageCount - 1} onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))}>Weiter →</button>
-        </div>
-      </footer> : null}
+      <div className={styles.toolbar}><div className={styles.search}><SearchIcon/><input ref={searchRef} value={search} onChange={e=>setSearch(e.target.value)} placeholder="Firma, Ansprechpartner, E-Mail, Ort, nächster Schritt …"/><kbd>/</kbd></div><select value={stageFilter} onChange={e=>setStageFilter(e.target.value)}><option value="all">Alle Prozessstufen</option>{FLOW_STEPS.map((step,i)=><option key={step} value={i}>{i+1}. {step}</option>)}</select><select value={statusFilter} onChange={e=>setStatusFilter(e.target.value as "all"|LeadStatus)}><option value="all">Alle CRM-Status</option>{STATUS_OPTIONS.map(([v,n])=><option value={v} key={v}>{n}</option>)}</select><span className={styles.resultCount}>{filtered.length} Leads</span></div>
+      {selected.size?<div className={styles.bulkBar}><strong>{selected.size} ausgewählt</strong><span>Bulk-Aktionen bewusst reduziert – Prozessschritte werden pro Lead geprüft.</span><button onClick={()=>setSelected(new Set())}>Aufheben</button><button className={styles.danger} onClick={()=>void deleteSelected()}>Löschen</button></div>:null}
+      <div className={styles.tableWrap}><table className={styles.table}><thead><tr><th className={styles.check}><input type="checkbox" checked={allVisibleSelected} onChange={toggleVisible}/></th><th>Lead</th><th>Prozess</th><th>Engagement</th><th>Intent</th><th>Nächste Aktion</th><th/></tr></thead><tbody>{visible.map(row=>{const w=row.workflow,e=engagement(row),stage=stageIndex(w),problem=hasGateProblem(row);return <tr key={row.id} className={problem?styles.problemRow:""} onClick={()=>router.push(`/leads/${row.id}`)}><td className={styles.check} onClick={event=>event.stopPropagation()}><input type="checkbox" checked={selected.has(row.id)} onChange={()=>toggle(row.id)}/></td><td><div className={styles.identity}><span className={styles.avatar}>{initials(row.company_name)}</span><div><strong>{row.company_name}</strong><small>{row.contact_name||"Ansprechpartner offen"}{row.city?` · ${row.city}`:""}</small></div></div></td><td><div className={styles.flowCell}><div className={styles.flowBar}>{FLOW_STEPS.map((_,i)=><i key={i} className={i<stage?styles.done:i===stage?styles.current:""}/>)}</div><div><strong>{problem?"Prüfung erforderlich":w?.workflow_stage_label||"Lead angelegt"}</strong><small>{Math.max(0,Math.min(100,w?.workflow_percent||12))}% · {w?.contact_count||0} Kontakt-Kandidaten</small></div></div></td><td><span className={`${styles.engagement} ${styles[e.tone]}`}><b>{e.value}</b><span>{e.label}</span></span></td><td><div className={styles.intent}><strong>{row.intent_score}</strong><span>/100</span></div></td><td><div className={styles.next}><strong>{nextAction(row)}</strong><small>{row.next_action_at?formatDate(row.next_action_at):problem?"Blocker zuerst beheben":"kein Termin gesetzt"}</small></div></td><td><span className={styles.rowArrow}><ArrowIcon/></span></td></tr>})}</tbody></table>{!visible.length?<div className={styles.empty}><strong>Keine Leads gefunden.</strong><span>Filter oder Suche anpassen.</span></div>:null}</div>
+      {filtered.length?<footer className={styles.pagination}><span>{safePage*PAGE_SIZE+1}–{Math.min(filtered.length,safePage*PAGE_SIZE+PAGE_SIZE)} von {filtered.length}</span><div><button disabled={safePage===0} onClick={()=>setPage(v=>Math.max(0,v-1))}>Zurück</button><strong>{safePage+1} / {pageCount}</strong><button disabled={safePage>=pageCount-1} onClick={()=>setPage(v=>Math.min(pageCount-1,v+1))}>Weiter</button></div></footer>:null}
     </section>
 
-    {quickLead ? <div className={styles.modalBackdrop} onMouseDown={() => setQuickLeadId(null)}><section className={`${styles.modal} ${styles.quickModal}`} onMouseDown={(e) => e.stopPropagation()} key={quickLead.id}>
-      <div className={styles.quickHead}>
-        <div className={styles.quickIdentity}><span>{initials(quickLead.company_name)}</span><div><small>Schnellbearbeitung</small><h2>{quickLead.company_name}</h2><p>{[quickLead.contact_name, quickLead.industry, quickLead.city].filter(Boolean).join(" · ") || "Noch nicht angereichert"}</p></div></div>
-        <div className={styles.quickMeta}><span className={`${styles.status} ${styles[`status_${quickLead.status}`] || ""}`}>{STATUS_LABEL[quickLead.status]}</span><strong>{quickLead.total_score}<small>/100</small></strong><button type="button" onClick={() => setQuickLeadId(null)} aria-label="Schnellbearbeitung schließen">×</button></div>
-      </div>
-      <form onSubmit={quickEdit} className={styles.form}>
-        <div className={styles.formGrid}><label><span>Status</span><select name="status" defaultValue={quickLead.status}>{STATUS_OPTIONS.map(([value, name]) => <option value={value} key={value}>{name}</option>)}</select></label><label><span>Ansprechpartner</span><input name="contact_name" defaultValue={quickLead.contact_name || ""} /></label></div>
-        <div className={styles.formGrid}><label><span>E-Mail</span><input name="email" type="email" defaultValue={quickLead.email || ""} /></label><label><span>Telefon</span><input name="phone" defaultValue={quickLead.phone || ""} /></label></div>
-        <div className={styles.formGrid}><label><span>Nächster Schritt</span><input name="next_action" defaultValue={quickLead.next_action || ""} placeholder="z. B. Rückruf, Angebot senden" /></label><label><span>Fällig am</span><input name="next_action_at" type="datetime-local" defaultValue={datetimeLocal(quickLead.next_action_at)} /></label></div>
-        <div className={styles.formGrid}>{isCommercial ? <label><span>Branche</span><input name="industry" defaultValue={quickLead.industry || ""} /></label> : <label><span>Ort</span><input name="city" defaultValue={quickLead.city || ""} /></label>}<label><span>Kontakt</span><select name="do_not_contact" defaultValue={quickLead.do_not_contact ? "yes" : "no"}><option value="no">Kontakt erlaubt</option><option value="yes">Nicht kontaktieren</option></select></label></div>
-        {isCommercial ? <label className={styles.compactCity}><span>Ort</span><input name="city" defaultValue={quickLead.city || ""} /></label> : null}
-        <div className={styles.quickActions}>
-          <button type="button" onClick={() => router.push(`/leads/${quickLead.id}`)}>Lead vollständig öffnen</button>
-          <div className={styles.actionSpacer}/>
-          <button type="button" onClick={() => setQuickLeadId(null)}>Abbrechen</button>
-          <button className={styles.primary} disabled={busy}>{busy ? "Speichert …" : "Änderungen speichern"}</button>
-        </div>
-      </form>
-    </section></div> : null}
-
-    {bulkOpen ? <div className={styles.modalBackdrop} onMouseDown={() => setBulkOpen(false)}><section className={styles.modal} onMouseDown={(e) => e.stopPropagation()}>
-      <div className={styles.modalHead}><div><span>Bulk Edit</span><h2>{selectedRows.length} Leads bearbeiten</h2></div><button type="button" onClick={() => setBulkOpen(false)}>×</button></div>
-      <form onSubmit={bulkEdit} className={styles.form}>
-        <label><span>Status ändern</span><select name="status" defaultValue=""><option value="">Unverändert</option>{STATUS_OPTIONS.map(([value, name]) => <option value={value} key={value}>{name}</option>)}</select></label>
-        <label><span>CRM verschieben</span><select name="customer_type" defaultValue=""><option value="">Unverändert</option><option value="commercial">Gewerbekunden-CRM</option><option value="private">Privatkunden-CRM</option></select></label>
-        <label><span>Branche setzen</span><input name="industry" placeholder="Leer = unverändert" /></label>
-        <label><span>Nächste Aktion setzen</span><input name="next_action" placeholder="Leer = unverändert" /></label>
-        <label><span>Kontaktstatus</span><select name="dnc" defaultValue=""><option value="">Unverändert</option><option value="no">Kontakt erlaubt</option><option value="yes">Nicht kontaktieren (DNC)</option></select></label>
-        <div className={styles.modalActions}><button type="button" onClick={() => setBulkOpen(false)}>Abbrechen</button><button className={styles.primary} disabled={busy}>{busy ? "Speichert …" : "Änderungen anwenden"}</button></div>
-      </form>
-    </section></div> : null}
-
-    {createOpen ? <div className={styles.modalBackdrop} onMouseDown={() => setCreateOpen(false)}><section className={styles.modal} onMouseDown={(e) => e.stopPropagation()}>
-      <div className={styles.modalHead}><div><span>Neuer Datensatz</span><h2>{singular} anlegen</h2></div><button type="button" onClick={() => setCreateOpen(false)}>×</button></div>
-      <form onSubmit={createLead} className={styles.form}>
-        {isCommercial ? <label><span>Unternehmen *</span><input name="company_name" required autoFocus /></label> : null}
-        <label><span>{isCommercial ? "Ansprechpartner" : "Vor- und Nachname *"}</span><input name="contact_name" required={!isCommercial} autoFocus={!isCommercial} /></label>
-        <div className={styles.formGrid}><label><span>E-Mail</span><input name="email" type="email" /></label><label><span>Telefon</span><input name="phone" /></label></div>
-        {isCommercial ? <div className={styles.formGrid}><label><span>Website</span><input name="website" /></label><label><span>Branche</span><input name="industry" /></label></div> : null}
-        <label><span>Adresse</span><input name="address" /></label>
-        <div className={styles.formGrid}><label><span>PLZ</span><input name="postcode" /></label><label><span>Ort</span><input name="city" /></label></div>
-        <div className={styles.modalActions}><button type="button" onClick={() => setCreateOpen(false)}>Abbrechen</button><button className={styles.primary} disabled={busy}>{busy ? "Legt an …" : `${singular} anlegen`}</button></div>
-      </form>
-    </section></div> : null}
-  </div>;
+    {createOpen?<div className={styles.modalBackdrop} onMouseDown={()=>setCreateOpen(false)}><section className={styles.modal} onMouseDown={e=>e.stopPropagation()}><div className={styles.modalHead}><div><span>Neuer Workflow</span><h2>{singular} anlegen</h2><p>Nach dem Anlegen landest du direkt im Lead-Cockpit beim Enrichment.</p></div><button onClick={()=>setCreateOpen(false)}>×</button></div><form onSubmit={createLead} className={styles.form}>{isCommercial?<label><span>Unternehmen *</span><input name="company_name" required autoFocus/></label>:null}<label><span>{isCommercial?"Ansprechpartner (optional)":"Vor- und Nachname *"}</span><input name="contact_name" required={!isCommercial} autoFocus={!isCommercial}/></label><div className={styles.formGrid}><label><span>E-Mail</span><input name="email" type="email"/></label><label><span>Telefon</span><input name="phone"/></label></div>{isCommercial?<div className={styles.formGrid}><label><span>Website</span><input name="website" placeholder="https://…"/></label><label><span>Branche</span><input name="industry"/></label></div>:null}<label><span>Adresse</span><input name="address"/></label><div className={styles.formGrid}><label><span>PLZ</span><input name="postcode"/></label><label><span>Ort</span><input name="city"/></label></div><div className={styles.modalActions}><button type="button" onClick={()=>setCreateOpen(false)}>Abbrechen</button><button className={styles.primary} disabled={busy}><PlusIcon/>{busy?"Wird angelegt …":"Lead anlegen"}</button></div></form></section></div>:null}
+  </div>
 }
