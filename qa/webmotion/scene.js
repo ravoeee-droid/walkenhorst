@@ -1,14 +1,14 @@
 const fps = 30;
 const storage = "https://jiahshldcusphxtbqxpv.supabase.co/storage/v1/object/public/energy-media/1b6c9d54-48c7-4bda-bac0-5ede3c71e197/template-slides";
 const slides = [
-  `${storage}/70c35ad9-2b6f-4009-b606-e6040e1b159d-energiekosten-clean-01.png`,
-  `${storage}/f4378915-6896-4fec-a01d-83ee7213f5b5-energiekosten-clean-02.png`,
-  `${storage}/6570da32-d578-4d10-895c-a98ef74d2a2b-energiekosten-clean-03.png`,
-  `${storage}/4b5b0592-f7df-4e8d-bb0f-68a4ad3e6b36-energiekosten-clean-04.png`,
-  `${storage}/6be6f532-278a-4096-9c7b-586421222e85-energiekosten-clean-05.png`,
-  `${storage}/81dc95b4-5f15-4bd4-bf6f-3b336494a1b4-energiekosten-clean-06.png`,
-  `${storage}/436da12b-d3ee-48d4-91b5-801b33a5b427-energiekosten-clean-07.png`,
-  `${storage}/36b2ce21-414d-4014-9519-e3e7cac0ccd5-energiekosten-clean-08.png`,
+  `${storage}/bd91683f-15b1-464a-bbe1-9aeea72b6719-energiekosten-slide-01-capture.webp`,
+  `${storage}/beb727d7-6f53-42e4-9e26-6862fb432790-energiekosten-slide-02-capture.webp`,
+  `${storage}/4ff3c801-99e8-4dac-a1bc-a7f43b8b9937-energiekosten-slide-03-capture.webp`,
+  `${storage}/8ebb9736-2d51-4c86-8822-dd322db83c43-energiekosten-slide-04-capture.webp`,
+  `${storage}/8e7e31b9-8386-452f-958f-62daf6b0712a-energiekosten-slide-05-capture.webp`,
+  `${storage}/f0a7e3b3-013e-4c5e-bb0a-2fbd82858465-energiekosten-slide-06-capture.webp`,
+  `${storage}/2b9ef9c4-88eb-4c52-b5ea-e967a698c6ce-energiekosten-slide-07-capture.webp`,
+  `${storage}/c3549308-0fa3-42f9-9921-a64820f32506-energiekosten-slide-08-capture.webp`,
 ];
 const beats = [
   { label: "Website", from: 0, to: 14200, kind: "website" },
@@ -40,7 +40,7 @@ function slideMarkup(beat) {
         <div style="text-align:center;max-width:780px;padding:50px">
           <div style="font-size:19px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#a77b13">Walkenhorst Energie</div>
           <div style="font-size:52px;line-height:1.04;font-weight:850;margin-top:18px">Website-Analyse · personalisierter Einstieg</div>
-          <div style="font-size:23px;line-height:1.45;color:#5f625e;margin-top:20px">Der echte Website-Capture wird pro Lead im Render-Preflight geprüft. Diese QA-Komposition sichert die Master-Timeline und die acht echten Clean-Slides.</div>
+          <div style="font-size:23px;line-height:1.45;color:#5f625e;margin-top:20px">Der echte Website-Capture wird pro Lead im Render-Preflight geprüft. Diese QA-Komposition sichert die Master-Timeline und die acht 1280×720 Production-Slides.</div>
         </div>
       </w-el>`;
   }
