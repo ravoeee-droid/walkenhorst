@@ -1,0 +1,23 @@
+{
+  "contractVersion": "1.0.0",
+  "instance": "CLIENT-WALKENHORST",
+  "updatedAt": "2026-08-27",
+  "policy": "same-task-adapt-both-directions",
+  "status": "reference-audit-required-for-existing-drift",
+  "sharedSurfaces": {
+    "crmWorkflowCockpitV2": "current-reference",
+    "campaignControlPlane": "current-reference",
+    "campaignRunTracking": "current-reference",
+    "mailboxStatusWorkflow": "current-reference",
+    "callerQueue": "current-reference",
+    "leadDetailWorkspace": "current-reference",
+    "salesBrief": "current-reference",
+    "applicationFrame": "current-reference-adapt-not-copy",
+    "studioGenericV3": "current-reference"
+  },
+  "rules": [
+    "Shared product improvements must be adapted to the peer instance in the same task.",
+    "Never copy customer data, credentials, Supabase refs, branding, PV-specific logic or Walkenhorst-specific content into another instance.",
+    "Do not mark a shared-core task complete until both instances are adapted or a blocker is recorded in both status files."
+  ]
+}
