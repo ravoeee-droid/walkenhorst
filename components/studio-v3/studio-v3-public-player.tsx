@@ -31,7 +31,7 @@ export function StudioV3PublicPlayer({timeline,brand,variables,resolveSource,onP
   };
   raf.current=requestAnimationFrame(tick);
   return()=>{if(raf.current)cancelAnimationFrame(raf.current)}
- },[duration,onProgress,playing,speed,timeMs]);
+ },[duration,onProgress,playing,speed]);
 
  function toggle(){
   if(timeMs>=duration-20){setTimeMs(0);marks.current.clear();started.current=false}
