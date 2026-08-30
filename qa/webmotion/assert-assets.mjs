@@ -4,14 +4,14 @@ import { chromium } from "playwright";
 
 const storage = "https://jiahshldcusphxtbqxpv.supabase.co/storage/v1/object/public/energy-media/1b6c9d54-48c7-4bda-bac0-5ede3c71e197/template-slides";
 const slides = [
-  "bd91683f-15b1-464a-bbe1-9aeea72b6719-energiekosten-slide-01-capture.webp",
-  "beb727d7-6f53-42e4-9e26-6862fb432790-energiekosten-slide-02-capture.webp",
-  "4ff3c801-99e8-4dac-a1bc-a7f43b8b9937-energiekosten-slide-03-capture.webp",
-  "8ebb9736-2d51-4c86-8822-dd322db83c43-energiekosten-slide-04-capture.webp",
-  "8e7e31b9-8386-452f-958f-62daf6b0712a-energiekosten-slide-05-capture.webp",
-  "f0a7e3b3-013e-4c5e-bb0a-2fbd82858465-energiekosten-slide-06-capture.webp",
-  "2b9ef9c4-88eb-4c52-b5ea-e967a698c6ce-energiekosten-slide-07-capture.webp",
-  "c3549308-0fa3-42f9-9921-a64820f32506-energiekosten-slide-08-capture.webp",
+  { file: "70c35ad9-2b6f-4009-b606-e6040e1b159d-energiekosten-clean-01.png", etag: "af2ccb8a5d6f6dbbde2aecbd23243e12" },
+  { file: "f4378915-6896-4fec-a01d-83ee7213f5b5-energiekosten-clean-02.png", etag: "a990dc05737d6daba855b80299eed8fa" },
+  { file: "6570da32-d578-4d10-895c-a98ef74d2a2b-energiekosten-clean-03.png", etag: "f7673461449a8f4f8b5ff62eb1b76b7a" },
+  { file: "4b5b0592-f7df-4e8d-bb0f-68a4ad3e6b36-energiekosten-clean-04.png", etag: "994d2eadfe9eda07eaea7be778591b8c" },
+  { file: "6be6f532-278a-4096-9c7b-586421222e85-energiekosten-clean-05.png", etag: "785a10000d7fc3a28c791178501176c0" },
+  { file: "81dc95b4-5f15-4bd4-bf6f-3b336494a1b4-energiekosten-clean-06.png", etag: "c2b5bdca4aa611aac08b7739219358f1" },
+  { file: "436da12b-d3ee-48d4-91b5-801b33a5b427-energiekosten-clean-07.png", etag: "ed024bfab85ff5cced9a39004a573a9d" },
+  { file: "36b2ce21-414d-4014-9519-e3e7cac0ccd5-energiekosten-clean-08.png", etag: "13585f5cd066e3531c153278ee5d02c1" },
 ];
 
 const cacheDir = path.resolve(".webmotion/assets");
@@ -21,15 +21,17 @@ const failures = [];
 const browser = await chromium.launch();
 try {
   const page = await browser.newPage();
-  for (const [index, file] of slides.entries()) {
-    const url = `${storage}/${file}`;
+  for (const [index, asset] of slides.entries()) {
+    const url = `${storage}/${asset.file}`;
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(20_000) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const type = response.headers.get("content-type") || "";
-      if (!type.toLowerCase().includes("image/webp")) throw new Error(`unerwarteter Content-Type: ${type || "leer"}`);
+      if (!type.toLowerCase().includes("image/png")) throw new Error(`unerwarteter Content-Type: ${type || "leer"}`);
+      const etag = String(response.headers.get("etag") || "").replaceAll('"', "").trim().toLowerCase();
+      if (etag && etag !== asset.etag) throw new Error(`Asset-Inhalt verändert: ETag ${etag}, erwartet ${asset.etag}`);
       const buffer = Buffer.from(await response.arrayBuffer());
-      if (buffer.length < 20_000) throw new Error(`Datei auffällig klein (${buffer.length} Bytes)`);
+      if (buffer.length < 40_000) throw new Error(`Datei auffällig klein (${buffer.length} Bytes)`);
 
       const decoded = await page.evaluate(async (src) => {
         return await new Promise((resolve) => {
@@ -42,20 +44,20 @@ try {
           };
           image.onerror = () => {
             window.clearTimeout(timer);
-            resolve({ ok: false, error: "Browser konnte WebP nicht decodieren" });
+            resolve({ ok: false, error: "Browser konnte PNG nicht decodieren" });
           };
           image.src = src;
         });
       }, url);
 
       if (!decoded.ok) throw new Error(decoded.error || "Browser-Decode fehlgeschlagen");
-      if (decoded.width !== 1280 || decoded.height !== 720) {
-        throw new Error(`falsche decodierte Größe ${decoded.width}x${decoded.height}, erwartet 1280x720`);
+      if (decoded.width !== 1672 || decoded.height !== 941) {
+        throw new Error(`falsche decodierte Größe ${decoded.width}x${decoded.height}, erwartet 1672x941`);
       }
 
-      const localName = `energiekosten-${String(index + 1).padStart(2, "0")}.webp`;
+      const localName = `energiekosten-${String(index + 1).padStart(2, "0")}.png`;
       await writeFile(path.join(cacheDir, localName), buffer);
-      process.stdout.write(`✓ Slide ${index + 1}: ${decoded.width}x${decoded.height}, ${Math.round(buffer.length / 1024)} KB, Browser-Decode OK → ${localName}\n`);
+      process.stdout.write(`✓ Clean Slide ${index + 1}: ${decoded.width}x${decoded.height}, ${Math.round(buffer.length / 1024)} KB, Content-Pin ${asset.etag.slice(0, 8)} → ${localName}\n`);
     } catch (error) {
       failures.push(`Slide ${index + 1}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -65,9 +67,9 @@ try {
 }
 
 if (failures.length) {
-  console.error("\nEnergiekosten Asset-Preflight fehlgeschlagen:");
+  console.error("\nEnergiekosten Golden-Master-Preflight fehlgeschlagen:");
   for (const failure of failures) console.error(`- ${failure}`);
   process.exit(1);
 }
 
-console.log("\n✓ Alle 8 Energiekosten-Production-Assets sind erreichbar, im Chromium decodierbar, exakt 1280x720 und lokal für WebMotion QA gecacht.");
+console.log("\n✓ Alle 8 CLEAN Energiekosten-Originale sind content-gepinnt, im Chromium decodierbar und exakt 1672x941. Canva-Capture-Fallbacks sind nicht mehr zulässig.");
