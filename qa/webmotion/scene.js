@@ -1,13 +1,13 @@
 const fps = 30;
 const slides = [
-  "/.webmotion/assets/energiekosten-01.webp",
-  "/.webmotion/assets/energiekosten-02.webp",
-  "/.webmotion/assets/energiekosten-03.webp",
-  "/.webmotion/assets/energiekosten-04.webp",
-  "/.webmotion/assets/energiekosten-05.webp",
-  "/.webmotion/assets/energiekosten-06.webp",
-  "/.webmotion/assets/energiekosten-07.webp",
-  "/.webmotion/assets/energiekosten-08.webp",
+  "/.webmotion/assets/energiekosten-01.png",
+  "/.webmotion/assets/energiekosten-02.png",
+  "/.webmotion/assets/energiekosten-03.png",
+  "/.webmotion/assets/energiekosten-04.png",
+  "/.webmotion/assets/energiekosten-05.png",
+  "/.webmotion/assets/energiekosten-06.png",
+  "/.webmotion/assets/energiekosten-07.png",
+  "/.webmotion/assets/energiekosten-08.png",
 ];
 const beats = [
   { label: "Website", from: 0, to: 14200, kind: "website" },
@@ -29,7 +29,7 @@ export const config = {
   fps,
   duration: frame(107000),
   background: "#101110",
-  downloadName: "walkenhorst-energiekosten-qa.mp4",
+  downloadName: "walkenhorst-energiekosten-golden-master-qa.mp4",
 };
 
 function slideMarkup(beat) {
@@ -39,7 +39,7 @@ function slideMarkup(beat) {
         <div style="text-align:center;max-width:780px;padding:50px">
           <div style="font-size:19px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#a77b13">Walkenhorst Energie</div>
           <div style="font-size:52px;line-height:1.04;font-weight:850;margin-top:18px">Website-Analyse · personalisierter Einstieg</div>
-          <div style="font-size:23px;line-height:1.45;color:#5f625e;margin-top:20px">Der echte Website-Capture wird pro Lead im Render-Preflight geprüft. Diese QA-Komposition verwendet exakt die acht zuvor im Chromium validierten 1280×720 Production-Slides.</div>
+          <div style="font-size:23px;line-height:1.45;color:#5f625e;margin-top:20px">Der echte Website-Capture wird pro Lead im Render-Preflight geprüft. Diese QA-Komposition verwendet ausschließlich die acht content-gepinnten CLEAN Original-Exports.</div>
         </div>
       </w-el>`;
   }
