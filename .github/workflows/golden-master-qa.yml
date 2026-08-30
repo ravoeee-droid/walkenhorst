@@ -1,0 +1,31 @@
+name: Energiekosten Golden Master QA
+
+on:
+  push:
+    branches: [main, "feature/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  golden-master:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm install
+      - run: npx playwright install --with-deps chromium
+      - name: Verify content-pinned clean assets
+        run: npm run qa:video:assets
+      - name: Lint WebMotion scene
+        run: npm run qa:video:lint
+      - name: Render visual QA frames
+        run: npm run qa:video:shoot
+      - name: Upload golden-master screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: energiekosten-golden-master-qa
+          if-no-files-found: error
+          path: .webmotion/shots
