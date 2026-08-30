@@ -6,12 +6,18 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "playwright test",
+    "qa:video:assets": "node qa/webmotion/assert-assets.mjs",
+    "qa:video:lint": "webmotion lint qa/webmotion/scene.js",
+    "qa:video:shoot": "webmotion shoot qa/webmotion/scene.js --out .webmotion/shots --frames auto"
   },
   "dependencies": {
     "@sparticuz/chromium-min": "149.0.0",
+    "@superhq/webmotion": "0.18.1",
     "@supabase/ssr": "0.12.3",
     "@supabase/supabase-js": "2.110.8",
+    "mp4box": "2.4.1",
     "next": "16.3.0",
     "puppeteer-core": "25.1.0",
     "react": "19.2.8",
@@ -19,9 +25,11 @@
     "tus-js-client": "4.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "1.62.1",
     "@types/node": "24.10.1",
     "@types/react": "19.2.2",
     "@types/react-dom": "19.2.2",
+    "playwright": "1.62.1",
     "typescript": "5.9.3"
   },
   "engines": {
