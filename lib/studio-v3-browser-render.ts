@@ -1,7 +1,6 @@
 "use client";
 
 import type { StudioV3BrandKit, StudioV3Item, StudioV3LeadVariables, StudioV3Timeline } from "@/lib/studio-v3";
-import { renderStudioV3Browser as renderCore } from "@/lib/studio-v3-browser-render-core";
 
 type Options = {
   timeline: StudioV3Timeline;
@@ -13,9 +12,15 @@ type Options = {
   maxWidth?: number;
 };
 
-type RenderResult = Awaited<ReturnType<typeof renderCore>>;
+type RenderResult = {
+  blob: Blob;
+  format: "mp4";
+  mimeType: "video/mp4";
+  warnings: string[];
+  width: number;
+  height: number;
+};
 
-const ENERGY_SPRITE = "/assets/energiekosten/production-sprite.webp";
 const ENERGY_TIMINGS: Record<number, [number, number]> = {
   1: [14200, 25200],
   2: [25200, 36200],
@@ -40,8 +45,9 @@ function normalizeTimeline(input: StudioV3Timeline) {
     const slide = slideNumber(item);
     if (slide) found.add(slide);
   }
-  if (!found.size) return { timeline, energy: false };
+  if (!found.size) return timeline;
   if (found.size !== 8) throw new Error(`Energiekosten-Master unvollständig: ${found.size}/8 Slides gefunden.`);
+
   timeline.durationMs = 107000;
   for (const track of timeline.tracks) for (const item of track.items) {
     if (item.type === "presenter" || item.dynamicSource === "presenter") {
@@ -60,7 +66,7 @@ function normalizeTimeline(input: StudioV3Timeline) {
       item.endMs = ENERGY_TIMINGS[slide][1];
     }
   }
-  return { timeline, energy: true };
+  return timeline;
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string, onTimeout?: () => void) {
@@ -104,34 +110,6 @@ function loadMedia(url: string, ms = 30000) {
   }), ms, `Video-Asset Timeout nach ${Math.round(ms / 1000)} Sekunden.`);
 }
 
-function canvasBlob(canvas: HTMLCanvasElement) {
-  return new Promise<Blob>((resolve, reject) => canvas.toBlob(
-    (blob) => blob ? resolve(blob) : reject(new Error("Slide konnte nicht vorbereitet werden.")),
-    "image/webp",
-    .92,
-  ));
-}
-
-async function buildEnergySlides() {
-  const sprite = await loadImage(ENERGY_SPRITE, 15000);
-  if (sprite.naturalWidth !== 2560 || sprite.naturalHeight !== 2880) {
-    throw new Error(`Energiekosten-Produktionsgrafik ungültig: ${sprite.naturalWidth}×${sprite.naturalHeight}.`);
-  }
-  const urls = new Map<number, string>();
-  for (let slide = 1; slide <= 8; slide++) {
-    const canvas = document.createElement("canvas");
-    canvas.width = 1280;
-    canvas.height = 720;
-    const ctx = canvas.getContext("2d", { alpha: false });
-    if (!ctx) throw new Error(`Slide ${slide}: Canvas konnte nicht erstellt werden.`);
-    const index = slide - 1;
-    ctx.drawImage(sprite, (index % 2) * 1280, Math.floor(index / 2) * 720, 1280, 720, 0, 0, 1280, 720);
-    const blob = await canvasBlob(canvas);
-    urls.set(slide, URL.createObjectURL(blob));
-  }
-  return urls;
-}
-
 async function preflight(timeline: StudioV3Timeline, resolveSource: (item: StudioV3Item) => string | null) {
   const unique = new Map<string, StudioV3Item>();
   for (const item of timeline.tracks.flatMap((track) => track.items).filter((item) => !item.hidden)) {
@@ -154,29 +132,24 @@ async function preflight(timeline: StudioV3Timeline, resolveSource: (item: Studi
 }
 
 export async function renderStudioV3Browser(options: Options): Promise<RenderResult> {
-  const { timeline, energy } = normalizeTimeline(options.timeline);
-  const slideUrls = energy ? await buildEnergySlides() : new Map<number, string>();
-  const resolveSource = (item: StudioV3Item) => {
-    const slide = energy ? slideNumber(item) : null;
-    if (slide && slideUrls.has(slide)) return slideUrls.get(slide) || null;
-    return options.resolveSource(item);
-  };
+  if (typeof window === "undefined") throw new Error("Video-Rendering ist nur im Browser verfügbar.");
+  const timeline = normalizeTimeline(options.timeline);
   const controller = new AbortController();
   const forwardAbort = () => controller.abort();
   options.signal?.addEventListener("abort", forwardAbort, { once: true });
   try {
     options.onProgress?.(0);
-    await preflight(timeline, resolveSource);
+    await preflight(timeline, options.resolveSource);
     if (controller.signal.aborted || options.signal?.aborted) throw new DOMException("Render abgebrochen", "AbortError");
     const deadline = Math.max(180000, timeline.durationMs * 2.5);
+    const { renderStudioV3Browser: renderCore } = await import("@/lib/studio-v3-browser-render-core");
     return await withTimeout(
-      renderCore({ ...options, timeline, resolveSource, signal: controller.signal }),
+      renderCore({ ...options, timeline, signal: controller.signal }),
       deadline,
       `Video-Render Timeout nach ${Math.round(deadline / 1000)} Sekunden.`,
       () => controller.abort(),
     );
   } finally {
     options.signal?.removeEventListener("abort", forwardAbort);
-    for (const url of slideUrls.values()) URL.revokeObjectURL(url);
   }
 }

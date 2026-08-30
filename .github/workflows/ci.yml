@@ -8,6 +8,11 @@ permissions:
   contents: read
   statuses: write
 
+env:
+  NEXT_PUBLIC_SUPABASE_URL: https://qa.supabase.invalid
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: qa-publishable-key
+  NEXT_PUBLIC_SITE_URL: http://127.0.0.1:4173
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -62,6 +67,60 @@ jobs:
         if: steps.nextbuild.outcome == 'failure'
         run: |
           grep -E -m 1 'Error:|TypeError:|ReferenceError:|Failed to compile|Build error|prerender|Module not found|Export encountered' build.log || tail -n 40 build.log || true
+      - id: browsers
+        if: steps.nextbuild.outcome == 'success'
+        continue-on-error: true
+        run: npx playwright install --with-deps chromium
+      - id: playwright
+        if: steps.browsers.outcome == 'success'
+        continue-on-error: true
+        run: npm run test:e2e
+      - name: Publish Playwright status
+        if: always() && steps.nextbuild.outcome == 'success'
+        env: { GH_TOKEN: "${{ github.token }}", STATE: "${{ steps.playwright.outcome }}" }
+        run: |
+          state=$([ "$STATE" = "success" ] && echo success || echo failure)
+          curl -sS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.sha }} -d "{\"state\":\"$state\",\"context\":\"walkenhorst-ci/playwright\"}" >/dev/null
+      - id: energyassets
+        if: steps.nextbuild.outcome == 'success'
+        continue-on-error: true
+        run: npm run qa:video:assets
+      - name: Publish Energiekosten asset status
+        if: always() && steps.nextbuild.outcome == 'success'
+        env: { GH_TOKEN: "${{ github.token }}", STATE: "${{ steps.energyassets.outcome }}" }
+        run: |
+          state=$([ "$STATE" = "success" ] && echo success || echo failure)
+          curl -sS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.sha }} -d "{\"state\":\"$state\",\"context\":\"walkenhorst-ci/energiekosten-assets\"}" >/dev/null
+      - id: webmotionlint
+        if: steps.browsers.outcome == 'success' && steps.energyassets.outcome == 'success'
+        continue-on-error: true
+        run: npm run qa:video:lint
+      - name: Publish WebMotion lint status
+        if: always() && steps.nextbuild.outcome == 'success'
+        env: { GH_TOKEN: "${{ github.token }}", STATE: "${{ steps.webmotionlint.outcome }}" }
+        run: |
+          state=$([ "$STATE" = "success" ] && echo success || echo failure)
+          curl -sS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.sha }} -d "{\"state\":\"$state\",\"context\":\"walkenhorst-ci/webmotion-lint\"}" >/dev/null
+      - id: webmotionshoot
+        if: steps.webmotionlint.outcome == 'success'
+        continue-on-error: true
+        run: npm run qa:video:shoot
+      - name: Publish WebMotion screenshots status
+        if: always() && steps.nextbuild.outcome == 'success'
+        env: { GH_TOKEN: "${{ github.token }}", STATE: "${{ steps.webmotionshoot.outcome }}" }
+        run: |
+          state=$([ "$STATE" = "success" ] && echo success || echo failure)
+          curl -sS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.sha }} -d "{\"state\":\"$state\",\"context\":\"walkenhorst-ci/webmotion-shoot\"}" >/dev/null
+      - name: Upload QA artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: walkenhorst-release-qa
+          if-no-files-found: ignore
+          path: |
+            playwright-report
+            test-results
+            .webmotion/shots
       - name: Fail workflow if verification failed
-        if: steps.install.outcome != 'success' || steps.audit.outcome != 'success' || steps.typecheck.outcome != 'success' || steps.nextbuild.outcome != 'success'
+        if: steps.install.outcome != 'success' || steps.audit.outcome != 'success' || steps.typecheck.outcome != 'success' || steps.nextbuild.outcome != 'success' || steps.browsers.outcome != 'success' || steps.playwright.outcome != 'success' || steps.energyassets.outcome != 'success' || steps.webmotionlint.outcome != 'success' || steps.webmotionshoot.outcome != 'success'
         run: exit 1
