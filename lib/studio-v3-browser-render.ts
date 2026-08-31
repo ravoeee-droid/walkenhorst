@@ -139,12 +139,31 @@ export async function renderStudioV3Browser(options: Options): Promise<RenderRes
   options.signal?.addEventListener("abort", forwardAbort, { once: true });
   try {
     options.onProgress?.(0);
+
+    // Production path: Chrome/Edge can record H.264 MP4 directly. This renderer
+    // advances continuously and avoids the WebMotion/WebCodecs pre-export stall
+    // that previously left 107-second campaign renders at exactly 4% until timeout.
+    const realtime = await import("@/lib/studio-v3-browser-render-realtime");
+    if (realtime.supportsRealtimeMp4Renderer()) {
+      options.onProgress?.(1);
+      const deadline = Math.max(180000, timeline.durationMs * 1.75);
+      return await withTimeout(
+        realtime.renderStudioV3Realtime({ ...options, timeline, signal: controller.signal, maxWidth: Math.min(options.maxWidth || 960, 960) }),
+        deadline,
+        `Realtime-MP4 Timeout nach ${Math.round(deadline / 1000)} Sekunden.`,
+        () => controller.abort(),
+      );
+    }
+
+    // Fallback for browsers without MP4 MediaRecorder support.
+    options.onProgress?.(2);
     await preflight(timeline, options.resolveSource);
+    options.onProgress?.(6);
     if (controller.signal.aborted || options.signal?.aborted) throw new DOMException("Render abgebrochen", "AbortError");
     const deadline = Math.max(180000, timeline.durationMs * 2.5);
     const { renderStudioV3Browser: renderCore } = await import("@/lib/studio-v3-browser-render-core");
     return await withTimeout(
-      renderCore({ ...options, timeline, signal: controller.signal }),
+      renderCore({ ...options, timeline, signal: controller.signal, maxWidth: Math.min(options.maxWidth || 960, 960) }),
       deadline,
       `Video-Render Timeout nach ${Math.round(deadline / 1000)} Sekunden.`,
       () => controller.abort(),
