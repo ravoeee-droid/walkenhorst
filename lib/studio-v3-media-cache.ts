@@ -42,7 +42,7 @@ async function readResponse(response: Response, signal: AbortSignal | undefined,
     return blob;
   }
   const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
+  const chunks: BlobPart[] = [];
   let received = 0;
   while (true) {
     if (signal?.aborted) {
@@ -52,7 +52,7 @@ async function readResponse(response: Response, signal: AbortSignal | undefined,
     const { done, value } = await reader.read();
     if (done) break;
     if (value?.byteLength) {
-      chunks.push(value);
+      chunks.push(value.slice().buffer as ArrayBuffer);
       received += value.byteLength;
       if (total > 0) onProgress?.(Math.min(0.99, received / total));
       else onProgress?.(Math.min(0.92, chunks.length / 80));
@@ -74,7 +74,7 @@ async function materializeOne(url: string, signal?: AbortSignal, onProgress?: (f
 
   const task = (async () => {
     if (signal?.aborted) throw abortError();
-    let cached = await responseFromCache(url);
+    const cached = await responseFromCache(url);
     if (cached) {
       const blob = await cached.blob();
       const local = URL.createObjectURL(blob);
