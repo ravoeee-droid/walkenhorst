@@ -140,15 +140,32 @@ export async function renderStudioV3Browser(options: Options): Promise<RenderRes
   try {
     options.onProgress?.(0);
 
+    // The presenter source is shared by every campaign lead. Download it once,
+    // store it in browser Cache Storage and render from a local blob URL. This
+    // avoids repeating a slow 16+ MB remote MP4 metadata read for every job.
+    const { materializeStudioVideoSources } = await import("@/lib/studio-v3-media-cache");
+    const localResolveSource = await withTimeout(
+      materializeStudioVideoSources(timeline, options.resolveSource, controller.signal, options.onProgress),
+      360000,
+      "Presenter-Vorbereitung Timeout nach 360 Sekunden.",
+      () => controller.abort(),
+    );
+    if (controller.signal.aborted || options.signal?.aborted) throw new DOMException("Render abgebrochen", "AbortError");
+
     // Production path: Chrome/Edge can record H.264 MP4 directly. This renderer
-    // advances continuously and avoids the WebMotion/WebCodecs pre-export stall
-    // that previously left 107-second campaign renders at exactly 4% until timeout.
+    // advances continuously and avoids the WebMotion/WebCodecs pre-export stall.
     const realtime = await import("@/lib/studio-v3-browser-render-realtime");
     if (realtime.supportsRealtimeMp4Renderer()) {
-      options.onProgress?.(1);
       const deadline = Math.max(180000, timeline.durationMs * 1.75);
       return await withTimeout(
-        realtime.renderStudioV3Realtime({ ...options, timeline, signal: controller.signal, maxWidth: Math.min(options.maxWidth || 960, 960) }),
+        realtime.renderStudioV3Realtime({
+          ...options,
+          timeline,
+          resolveSource: localResolveSource,
+          signal: controller.signal,
+          maxWidth: Math.min(options.maxWidth || 960, 960),
+          onProgress: (value) => options.onProgress?.(18 + Math.round(Math.max(0, Math.min(100, value)) * 0.82)),
+        }),
         deadline,
         `Realtime-MP4 Timeout nach ${Math.round(deadline / 1000)} Sekunden.`,
         () => controller.abort(),
@@ -156,14 +173,21 @@ export async function renderStudioV3Browser(options: Options): Promise<RenderRes
     }
 
     // Fallback for browsers without MP4 MediaRecorder support.
-    options.onProgress?.(2);
-    await preflight(timeline, options.resolveSource);
-    options.onProgress?.(6);
+    options.onProgress?.(19);
+    await preflight(timeline, localResolveSource);
+    options.onProgress?.(22);
     if (controller.signal.aborted || options.signal?.aborted) throw new DOMException("Render abgebrochen", "AbortError");
     const deadline = Math.max(180000, timeline.durationMs * 2.5);
     const { renderStudioV3Browser: renderCore } = await import("@/lib/studio-v3-browser-render-core");
     return await withTimeout(
-      renderCore({ ...options, timeline, signal: controller.signal, maxWidth: Math.min(options.maxWidth || 960, 960) }),
+      renderCore({
+        ...options,
+        timeline,
+        resolveSource: localResolveSource,
+        signal: controller.signal,
+        maxWidth: Math.min(options.maxWidth || 960, 960),
+        onProgress: (value) => options.onProgress?.(22 + Math.round(Math.max(0, Math.min(100, value)) * 0.78)),
+      }),
       deadline,
       `Video-Render Timeout nach ${Math.round(deadline / 1000)} Sekunden.`,
       () => controller.abort(),
