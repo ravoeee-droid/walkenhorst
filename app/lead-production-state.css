@@ -1,0 +1,5 @@
+/* Keep the normal lead workflow unambiguous after a final video exists.
+   The manual re-render action uses the refresh icon and is intentionally hidden
+   from the production action row once it is rendered. Advanced re-renders stay
+   available through Studio. */
+[class*="productionActions"] button:has(svg path[d^="M20 7V3"]){display:none!important}
