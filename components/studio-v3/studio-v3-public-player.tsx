@@ -4,10 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import { StudioV3BrandKit, StudioV3Item, StudioV3LeadVariables, StudioV3Timeline, studioV3Time } from "@/lib/studio-v3";
 import { StudioV3Canvas } from "./studio-v3-canvas";
 
-type Props={timeline:StudioV3Timeline;brand:StudioV3BrandKit;variables:StudioV3LeadVariables;resolveSource?:(item:StudioV3Item)=>string|null;onPlaybackStart?:()=>void;onProgress?:(mark:number)=>void};
+type Props={timeline:StudioV3Timeline;brand:StudioV3BrandKit;variables:StudioV3LeadVariables;resolveSource?:(item:StudioV3Item)=>string|null;thumbnailWebsiteUrl?:string|null;thumbnailPresenterUrl?:string|null;onPlaybackStart?:()=>void;onProgress?:(mark:number)=>void};
 const speeds=[1,1.25,1.5,2];
 
-export function StudioV3PublicPlayer({timeline,brand,variables,resolveSource,onPlaybackStart,onProgress}:Props){
+export function StudioV3PublicPlayer({timeline,brand,variables,resolveSource,thumbnailWebsiteUrl,thumbnailPresenterUrl,onPlaybackStart,onProgress}:Props){
  const[timeMs,setTimeMs]=useState(0);
  const[playing,setPlaying]=useState(false);
  const[speedIndex,setSpeedIndex]=useState(0);
@@ -17,6 +17,7 @@ export function StudioV3PublicPlayer({timeline,brand,variables,resolveSource,onP
  const started=useRef(false);
  const marks=useRef(new Set<number>());
  const duration=Math.max(1000,timeline.durationMs),speed=speeds[speedIndex];
+ const showPoster=!started.current&&!playing&&timeMs<40&&Boolean(thumbnailWebsiteUrl);
 
  useEffect(()=>{
   if(!playing){if(raf.current)cancelAnimationFrame(raf.current);raf.current=null;return}
@@ -38,14 +39,14 @@ export function StudioV3PublicPlayer({timeline,brand,variables,resolveSource,onP
   const nextPlaying=!playing;
   if(nextPlaying){
    if(!started.current){started.current=true;onPlaybackStart?.()}
-   // Important for iOS Safari: start nested media synchronously inside the user's click gesture.
-   for(const media of Array.from(rootRef.current?.querySelectorAll("video")||[])){
+   // Important for iOS Safari: start nested timeline media synchronously inside the user's click gesture.
+   for(const media of Array.from(rootRef.current?.querySelectorAll("video:not([data-poster-video])")||[])){
     const video=media as HTMLVideoElement;
     video.playbackRate=speed;
     void video.play().catch(()=>undefined);
    }
   }else{
-   for(const media of Array.from(rootRef.current?.querySelectorAll("video")||[]))(media as HTMLVideoElement).pause();
+   for(const media of Array.from(rootRef.current?.querySelectorAll("video:not([data-poster-video])")||[]))(media as HTMLVideoElement).pause();
   }
   setPlaying(nextPlaying)
  }
@@ -61,9 +62,17 @@ export function StudioV3PublicPlayer({timeline,brand,variables,resolveSource,onP
   else await rootRef.current?.requestFullscreen().catch(()=>undefined)
  }
 
- return <div ref={rootRef} data-studio-v3-public-player style={{borderRadius:18,overflow:"hidden",background:"#090909",boxShadow:"0 28px 80px rgba(0,0,0,.22)"}}>
-  <StudioV3Canvas timeline={timeline} timeMs={timeMs} playing={playing} playbackRate={speed} brand={brand} variables={variables} resolveSource={resolveSource}/>
-  <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:"#0D0D0D",color:"#fff"}}>
+ return <div ref={rootRef} data-studio-v3-public-player style={{borderRadius:18,overflow:"hidden",background:"#090909",boxShadow:"0 20px 54px rgba(0,0,0,.18)"}}>
+  <div style={{position:"relative"}}>
+   <StudioV3Canvas timeline={timeline} timeMs={timeMs} playing={playing} playbackRate={speed} brand={brand} variables={variables} resolveSource={resolveSource}/>
+   {showPoster?<button type="button" onClick={toggle} aria-label="Persönliche Videoanalyse abspielen" style={{position:"absolute",inset:0,border:0,padding:0,overflow:"hidden",background:"#07192a",cursor:"pointer",display:"block",width:"100%",height:"100%"}}>
+    <img src={thumbnailWebsiteUrl||""} alt="Unternehmenswebsite" draggable={false} style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",objectPosition:"top left",display:"block"}}/>
+    <span style={{position:"absolute",inset:0,background:"linear-gradient(180deg,rgba(3,17,30,.02),rgba(3,17,30,.10))"}}/>
+    {thumbnailPresenterUrl?<video data-poster-video src={thumbnailPresenterUrl} muted playsInline preload="auto" onLoadedData={event=>{const video=event.currentTarget;try{video.currentTime=Math.min(.08,Math.max(0,(video.duration||1)-.02))}catch{}}} style={{position:"absolute",right:"4.5%",bottom:"6%",width:"12.5%",aspectRatio:"1/1",height:"auto",objectFit:"cover",objectPosition:"center 22%",borderRadius:"50%",border:"3px solid rgba(255,255,255,.96)",background:"#d9e2e7",boxShadow:"0 12px 34px rgba(0,0,0,.30)"}}/>:null}
+    <span style={{position:"absolute",left:"50%",top:"50%",transform:"translate(-50%,-50%)",display:"grid",placeItems:"center",width:"clamp(52px,7vw,76px)",aspectRatio:"1/1",borderRadius:"50%",background:"rgba(255,255,255,.94)",color:"#07192a",boxShadow:"0 12px 34px rgba(0,0,0,.24)",fontSize:"clamp(19px,2.6vw,28px)",paddingLeft:3}}>▶</span>
+   </button>:null}
+  </div>
+  <div style={{display:"flex",alignItems:"center",gap:10,padding:"9px 11px",background:"#0D0D0D",color:"#fff"}}>
    <button onClick={toggle} style={button}>{playing?"Ⅱ":"▶"}</button>
    <button onClick={()=>seek(timeMs-10000)} style={button}>↶10</button>
    <input aria-label="Videoposition" type="range" min={0} max={duration} step={50} value={timeMs} onChange={event=>seek(Number(event.target.value))} style={{flex:1,accentColor:brand.accentColor}}/>
