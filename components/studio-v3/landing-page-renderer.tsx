@@ -19,6 +19,7 @@ type Props = {
   metrics?: Array<{ label: string; value: string }>;
   qualification?: ReactNode;
   onCta?: () => void;
+  onAction?: (action: string, target: string) => void;
   preview?: boolean;
 };
 
@@ -91,6 +92,16 @@ function MediaLayout({ block, image, children }: { block: StudioV3LandingBlock; 
   );
 }
 
+function ActionIcon({ kind }: { kind: string }) {
+  if (kind === "energy")
+    return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.2 2 5.8 13h5.5l-.5 9L18.2 11h-5.5l.5-9Z" /></svg>;
+  if (kind === "solar")
+    return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>;
+  if (kind === "calendar")
+    return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4M16 3v4M3 10h18M8 14h3M13 14h3M8 17h3"/></svg>;
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a8 8 0 0 1-11.8 7L4 20l1.5-4.1A8 8 0 1 1 20 11.5Z"/><path d="M8.5 10.2c1.2 2.4 2.9 4 5.4 5.2"/></svg>;
+}
+
 export function StudioV3LandingPage({
   landing,
   brand,
@@ -100,6 +111,7 @@ export function StudioV3LandingPage({
   metrics = [],
   qualification,
   onCta,
+  onAction,
   preview = false,
 }: Props) {
   const blocks = [...landing.blocks].filter((block) => block.enabled).sort((a, b) => a.order - b.order);
@@ -153,6 +165,7 @@ export function StudioV3LandingPage({
           metrics={metrics}
           qualification={qualification}
           onCta={clickCta}
+          onAction={onAction}
           preview={preview}
         />
       ))}
@@ -176,14 +189,16 @@ type BlockProps = {
   metrics: Array<{ label: string; value: string }>;
   qualification?: ReactNode;
   onCta: () => void;
+  onAction?: (action: string, target: string) => void;
   preview: boolean;
 };
 
-function LandingBlock({ block, brand, variables, video, findings, metrics, qualification, onCta, preview }: BlockProps) {
+function LandingBlock({ block, brand, variables, video, findings, metrics, qualification, onCta, onAction, preview }: BlockProps) {
   const headline = resolveStudioV3Text(block.headline || "", variables);
   const body = resolveStudioV3Text(block.body || "", variables);
   const eyebrow = resolveStudioV3Text(block.eyebrow || "", variables);
   const blockStyle = styleFor(block, brand);
+  const sectionId = String(block.settings?.anchorId || "").trim() || undefined;
   const heading = () => (headline ? <h2 className={styles.h2}>{headline}</h2> : null);
   const intro = () => (
     <>
@@ -224,7 +239,7 @@ function LandingBlock({ block, brand, variables, video, findings, metrics, quali
           }
         : blockStyle;
     return (
-      <section className={`${styles.block} ${styles.hero}`} style={heroStyle}>
+      <section id={sectionId} className={`${styles.block} ${styles.hero}`} style={heroStyle}>
         <div className={styles.inner}>
           {image && position !== "background" ? <MediaLayout block={block} image={image}>{heroContent}</MediaLayout> : heroContent}
         </div>
@@ -234,7 +249,7 @@ function LandingBlock({ block, brand, variables, video, findings, metrics, quali
 
   if (block.type === "video")
     return (
-      <section className={styles.block} style={blockStyle}>
+      <section id={sectionId} className={styles.block} style={blockStyle}>
         <div className={styles.inner}>
           <div className={styles.videoWrap}>{video}</div>
         </div>
@@ -261,7 +276,7 @@ function LandingBlock({ block, brand, variables, video, findings, metrics, quali
       </div>
     );
     return (
-      <section className={styles.block} style={blockStyle}>
+      <section id={sectionId} className={styles.block} style={blockStyle}>
         <div className={styles.inner}>
           <MediaLayout block={block} image={imageFor(block)}>{content}</MediaLayout>
         </div>
@@ -292,7 +307,7 @@ function LandingBlock({ block, brand, variables, video, findings, metrics, quali
       </div>
     );
     return (
-      <section className={styles.block} style={blockStyle}>
+      <section id={sectionId} className={styles.block} style={blockStyle}>
         <div className={styles.inner}>
           <MediaLayout block={block} image={imageFor(block)}>{content}</MediaLayout>
         </div>
@@ -309,7 +324,7 @@ function LandingBlock({ block, brand, variables, video, findings, metrics, quali
       </div>
     );
     return (
-      <section className={styles.block} style={blockStyle}>
+      <section id={sectionId} className={styles.block} style={blockStyle}>
         <div className={styles.inner}>
           {image ? (
             <MediaLayout block={{ ...block, settings: { ...(block.settings || {}), imagePosition: block.settings?.imagePosition || "right" } }} image={image}>
@@ -338,7 +353,7 @@ function LandingBlock({ block, brand, variables, video, findings, metrics, quali
       </div>
     );
     return (
-      <section className={styles.block} style={blockStyle}>
+      <section id={sectionId} className={styles.block} style={blockStyle}>
         <div className={styles.inner}>
           <MediaLayout block={block} image={image}>{content}</MediaLayout>
         </div>
@@ -352,7 +367,7 @@ function LandingBlock({ block, brand, variables, video, findings, metrics, quali
       ? custom.map((item) => ({ url: String(item.url), label: String(item.label || "Partner") }))
       : ((brand.metadata?.partnerLogos as string[]) || []).map((url) => ({ url, label: "Partner" }));
     return (
-      <section className={styles.block} style={blockStyle}>
+      <section id={sectionId} className={styles.block} style={blockStyle}>
         <div className={styles.inner}>
           {intro()}
           <div className={styles.logos}>
@@ -365,9 +380,59 @@ function LandingBlock({ block, brand, variables, video, findings, metrics, quali
     );
   }
 
-  if (block.type === "proof")
+  if (block.type === "proof") {
+    if (block.variant === "action-grid") {
+      return (
+        <section id={sectionId} className={`${styles.block} ${styles.actionSection}`} style={blockStyle}>
+          <div className={styles.inner}>
+            {intro()}
+            <div className={styles.actionGrid}>
+              {(block.items || []).map((item, index) => {
+                const target = resolveStudioV3Text(String(item.url || ""), variables).trim();
+                const action = String(item.action || `action_${index + 1}`);
+                const external = /^https?:\/\//i.test(target);
+                const accent = String(item.accent || "var(--block-accent)");
+                return (
+                  <a
+                    className={styles.actionCard}
+                    key={`${action}-${index}`}
+                    href={preview ? undefined : target || undefined}
+                    target={!preview && external ? "_blank" : undefined}
+                    rel={!preview && external ? "noopener noreferrer" : undefined}
+                    onClick={(event) => {
+                      if (preview || !target) event.preventDefault();
+                      else onAction?.(action, target);
+                    }}
+                    style={{ "--action-accent": accent } as React.CSSProperties}
+                  >
+                    <span className={styles.actionGlow} />
+                    <div className={styles.actionTop}>
+                      <span className={styles.actionIcon}><ActionIcon kind={String(item.icon || "message")} /></span>
+                      {item.badge ? <span className={styles.actionBadge}>{String(item.badge)}</span> : null}
+                    </div>
+                    <div className={styles.actionCopy}>
+                      {item.kicker ? <small>{String(item.kicker)}</small> : null}
+                      <strong>{String(item.title || "Nächster Schritt")}</strong>
+                      <p>{String(item.body || "")}</p>
+                    </div>
+                    <div className={styles.actionFooter}>
+                      <span>{String(item.label || "Öffnen")}</span>
+                      <b>↗</b>
+                    </div>
+                    {item.secondaryLabel && item.secondaryUrl ? (
+                      <span className={styles.actionSecondary}>{String(item.secondaryLabel)}</span>
+                    ) : null}
+                  </a>
+                );
+              })}
+            </div>
+            <div className={styles.actionTrust}>Persönlich · unverbindlich · Sie wählen den für Sie passenden Weg</div>
+          </div>
+        </section>
+      );
+    }
     return (
-      <section className={styles.block} style={blockStyle}>
+      <section id={sectionId} className={styles.block} style={blockStyle}>
         <div className={styles.inner}>
           {intro()}
           <div className={styles.proofGrid}>
@@ -388,6 +453,7 @@ function LandingBlock({ block, brand, variables, video, findings, metrics, quali
         </div>
       </section>
     );
+  }
 
   if (block.type === "qualification") {
     const content = (
@@ -397,7 +463,7 @@ function LandingBlock({ block, brand, variables, video, findings, metrics, quali
       </div>
     );
     return (
-      <section className={styles.block} style={blockStyle}>
+      <section id={sectionId} className={styles.block} style={blockStyle}>
         <div className={styles.inner}>
           <MediaLayout block={block} image={imageFor(block)}>{content}</MediaLayout>
         </div>
@@ -415,7 +481,7 @@ function LandingBlock({ block, brand, variables, video, findings, metrics, quali
       </div>
     );
     return (
-      <section className={styles.block} style={blockStyle}>
+      <section id={sectionId} className={styles.block} style={blockStyle}>
         <div className={styles.inner}>
           <MediaLayout block={block} image={imageFor(block)}>{content}</MediaLayout>
         </div>
@@ -425,7 +491,7 @@ function LandingBlock({ block, brand, variables, video, findings, metrics, quali
 
   if (block.type === "calendar")
     return (
-      <section className={styles.block} style={blockStyle}>
+      <section id={sectionId} className={styles.block} style={blockStyle}>
         <div className={styles.inner}>
           {intro()}
           <div className={styles.calendar}>
@@ -441,7 +507,7 @@ function LandingBlock({ block, brand, variables, video, findings, metrics, quali
 
   if (block.type === "faq")
     return (
-      <section className={styles.block} style={blockStyle}>
+      <section id={sectionId} className={styles.block} style={blockStyle}>
         <div className={styles.inner}>
           {intro()}
           <div className={styles.faq}>
@@ -458,7 +524,7 @@ function LandingBlock({ block, brand, variables, video, findings, metrics, quali
 
   if (block.type === "footer")
     return (
-      <footer className={styles.block} style={blockStyle}>
+      <footer id={sectionId} className={styles.block} style={blockStyle}>
         <div className={`${styles.inner} ${styles.footerGrid}`}>
           <div>{landingLogo(brand)}</div>
           <div>
