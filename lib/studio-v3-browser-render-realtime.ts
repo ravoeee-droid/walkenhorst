@@ -381,6 +381,36 @@ export async function renderStudioV3Realtime(options: Options): Promise<RenderRe
   const resources = await prepare(options, audio, destination, warnings);
   abortIfNeeded(options.signal);
 
+  const items = options.timeline.tracks.flatMap((track) => track.items).filter((item) => !item.hidden);
+  const itemsById = new Map(items.map((item) => [item.id, item]));
+  const mediaItems = items.filter((item) => ["video", "presenter", "audio"].includes(item.type) && resources.get(item.id)?.media);
+  const masterItem = [...mediaItems]
+    .sort((a, b) => {
+      const ap = a.type === "presenter" || a.dynamicSource === "presenter" ? 1 : 0;
+      const bp = b.type === "presenter" || b.dynamicSource === "presenter" ? 1 : 0;
+      if (ap !== bp) return bp - ap;
+      return (b.endMs - b.startMs) - (a.endMs - a.startMs);
+    })
+    .find((item) => item.startMs <= 250) || null;
+  const masterResource = masterItem ? resources.get(masterItem.id)?.media || null : null;
+
+  for (const [id, resource] of resources) {
+    if (!resource.media) continue;
+    const item = itemsById.get(id);
+    if (!item) continue;
+    resource.media.pause();
+    resource.media.playbackRate = item.playbackRate || 1;
+    try { resource.media.currentTime = 0; } catch {}
+    if (resource.gain) resource.gain.gain.value = 0;
+  }
+
+  ctx.fillStyle = options.timeline.backgroundColor || "#000000";
+  ctx.fillRect(0, 0, width, height);
+  for (const item of studioV3ActiveItems(options.timeline, 0)) {
+    if (item.type === "audio") continue;
+    drawItem(ctx, item, 0, resources.get(item.id), options.brand, options.variables, width, height);
+  }
+
   const stream = canvas.captureStream(fps);
   for (const track of destination.stream.getAudioTracks()) stream.addTrack(track);
   const recorder = new MediaRecorder(stream, {
@@ -397,16 +427,37 @@ export async function renderStudioV3Realtime(options: Options): Promise<RenderRe
     recorder.onerror = () => reject(new Error("MediaRecorder konnte das MP4 nicht fertigstellen."));
   });
 
-  recorder.start(1000);
-  const startedAt = performance.now();
   const mediaActive = new Map<string, boolean>();
+  recorder.start(1000);
+  const wallStartedAt = performance.now();
+
+  // The presenter's own media clock is the A/V master. Previously the canvas used
+  // performance.now() while audio came from the HTMLVideoElement. Browser startup,
+  // buffering and decoder latency therefore shifted the mouth image away from the
+  // captured audio. Driving the full timeline from currentTime keeps both locked.
+  if (masterItem && masterResource) {
+    if (masterResource instanceof HTMLVideoElement) masterResource.playsInline = true;
+    masterResource.playbackRate = masterItem.playbackRate || 1;
+    try { masterResource.currentTime = 0; } catch {}
+    const masterStored = resources.get(masterItem.id);
+    if (masterStored?.gain) masterStored.gain.gain.value = masterItem.muted ? 0 : masterItem.volume ?? 1;
+    await withTimeout(masterResource.play(), 8000, "Talking Head konnte nicht synchron gestartet werden.");
+    mediaActive.set(masterItem.id, true);
+  }
+
   let lastReported = -1;
   options.onProgress?.(9);
 
   try {
     while (true) {
       abortIfNeeded(options.signal);
-      const elapsed = Math.min(duration, performance.now() - startedAt);
+      const fallbackElapsed = performance.now() - wallStartedAt;
+      const masterRate = masterItem?.playbackRate || 1;
+      const masterElapsed = masterItem && masterResource && Number.isFinite(masterResource.currentTime)
+        ? masterItem.startMs + (masterResource.currentTime / Math.max(0.01, masterRate)) * 1000
+        : fallbackElapsed;
+      const elapsed = Math.min(duration, Math.max(0, masterElapsed));
+
       ctx.fillStyle = options.timeline.backgroundColor || "#000000";
       ctx.fillRect(0, 0, width, height);
 
@@ -414,21 +465,35 @@ export async function renderStudioV3Realtime(options: Options): Promise<RenderRe
       const activeIds = new Set(active.map((item) => item.id));
       for (const [id, resource] of resources) {
         if (!resource.media) continue;
-        const item = options.timeline.tracks.flatMap((track) => track.items).find((candidate) => candidate.id === id);
+        const item = itemsById.get(id);
         if (!item) continue;
         const isActive = activeIds.has(id);
         if (resource.gain) resource.gain.gain.value = isActive && !item.muted ? item.volume ?? 1 : 0;
+
+        if (id === masterItem?.id) {
+          if (!isActive && mediaActive.get(id)) {
+            resource.media.pause();
+            mediaActive.set(id, false);
+          }
+          continue;
+        }
+
         if (isActive) {
           const relative = Math.max(0, ((elapsed - item.startMs) / 1000) * (item.playbackRate || 1));
-          if (Math.abs(resource.media.currentTime - relative) > 0.28) {
+          if (Math.abs(resource.media.currentTime - relative) > 0.08) {
             try {
               resource.media.currentTime = Math.min(relative, Math.max(0, (resource.media.duration || relative + 0.1) - 0.05));
             } catch {}
           }
           resource.media.playbackRate = item.playbackRate || 1;
           if (!mediaActive.get(id)) {
-            void resource.media.play().catch(() => undefined);
-            mediaActive.set(id, true);
+            try {
+              await withTimeout(resource.media.play(), 4000, `${item.label || item.type}: Wiedergabe konnte nicht synchron gestartet werden.`);
+              mediaActive.set(id, true);
+            } catch (error) {
+              if (["video", "presenter"].includes(item.type)) throw error;
+              warnings.push(error instanceof Error ? error.message : `${item.label}: Wiedergabe fehlgeschlagen.`);
+            }
           }
         } else if (mediaActive.get(id)) {
           resource.media.pause();
