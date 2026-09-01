@@ -26,7 +26,7 @@ async function runHeadlessRender(origin:string,jobId:string,token:string){
     browser=await puppeteer.launch({args,executablePath,headless:"shell",defaultViewport:{width:1440,height:900,deviceScaleFactor:1}});
     const page=await browser.newPage();
     page.on("console",message=>console.log(`[render:${jobId}]`,message.type(),message.text()));
-    page.on("pageerror",error=>console.error(`[render:${jobId}] pageerror`,error.message));
+    page.on("pageerror",error=>console.error(`[render:${jobId}] pageerror`,error instanceof Error?error.message:String(error)));
     const renderUrl=`${origin}/internal/render/${encodeURIComponent(jobId)}?token=${encodeURIComponent(token)}`;
     const response=await page.goto(renderUrl,{waitUntil:"domcontentloaded",timeout:60000});
     if(!response||response.status()>=400)throw new Error(`Render-Seite antwortet mit HTTP ${response?.status()||"unbekannt"}`);
