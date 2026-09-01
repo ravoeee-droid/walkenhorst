@@ -26,7 +26,7 @@ jobs:
         run: |
           rm -rf qa/neuhaus-rev92
           mkdir -p qa/neuhaus-rev92
-          cat > /tmp/qa-frames.mjs <<'EOF'
+          cat > .qa-neuhaus-frames.mjs <<'EOF'
           import { chromium } from 'playwright';
           import fs from 'node:fs';
           const url='https://walkenhorst.vercel.app/v/neuhaus-neotec-maschinen-und-anlagenbau-gmbh-a3cf0c';
@@ -48,14 +48,14 @@ jobs:
               await video.evaluate(async(v,t)=>{
                 v.muted=true;
                 v.pause();
-                const done=new Promise((resolve,reject)=>{
+                if(Math.abs(v.currentTime-t)<0.01) return;
+                await new Promise((resolve,reject)=>{
                   const timer=setTimeout(()=>reject(new Error(`seek ${t}s timeout`)),15000);
-                  const finish=()=>{clearTimeout(timer);v.removeEventListener('seeked',finish);resolve();};
+                  const finish=()=>{clearTimeout(timer);resolve();};
                   v.addEventListener('seeked',finish,{once:true});
+                  v.currentTime=t;
                 });
-                v.currentTime=t;
-                await done;
-                await new Promise(r=>setTimeout(r,350));
+                await new Promise(r=>setTimeout(r,400));
               },t);
               const png=`/tmp/frame-${String(t).padStart(2,'0')}.png`;
               await video.screenshot({path:png});
@@ -71,7 +71,8 @@ jobs:
             await browser.close();
           }
           EOF
-          node /tmp/qa-frames.mjs || true
+          node .qa-neuhaus-frames.mjs > qa/neuhaus-rev92/node.log 2>&1 || true
+          rm -f .qa-neuhaus-frames.mjs
       - name: Commit QA evidence
         run: |
           git config user.name 'walkenhorst-video-qa'
