@@ -1,0 +1,52 @@
+name: Production MP4 Render Worker
+
+on:
+  schedule:
+    - cron: "*/15 5-18 * * 1-5"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/render-worker.yml"
+      - "scripts/render-worker.mjs"
+      - "supabase/functions/github-render-ticket/index.ts"
+      - "supabase/functions/render-orchestrator/index.ts"
+      - "supabase/migrations/063_automatic_render_worker_pipeline.sql"
+      - "supabase/migrations/064_scope_render_worker_claims.sql"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      WALKENHORST_APP_URL: https://walkenhorst.vercel.app
+      RENDER_TICKET_URL: https://jiahshldcusphxtbqxpv.supabase.co/functions/v1/github-render-ticket
+      MAX_JOBS_PER_RUN: "4"
+      RENDER_JOB_TIMEOUT_MS: "900000"
+      WORKER_SLOT: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-1.62.1-linux
+
+      - name: Install worker runtime
+        run: |
+          npm install --no-save --package-lock=false --no-audit --no-fund playwright@1.62.1
+          npx playwright install --with-deps chromium
+
+      - name: Drain render queue
+        run: node scripts/render-worker.mjs
