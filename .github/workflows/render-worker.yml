@@ -2,13 +2,14 @@ name: Production MP4 Render Worker
 
 on:
   schedule:
-    - cron: "*/15 5-18 * * 1-5"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
   push:
     branches: [main]
     paths:
       - ".github/workflows/render-worker.yml"
       - "scripts/render-worker.mjs"
+      - "scripts/render-probe.mjs"
       - "supabase/functions/github-render-ticket/index.ts"
       - "supabase/functions/render-orchestrator/index.ts"
       - "supabase/migrations/063_automatic_render_worker_pipeline.sql"
@@ -37,16 +38,23 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Probe durable render queue
+        id: probe
+        run: node scripts/render-probe.mjs
+
       - name: Cache Playwright Chromium
+        if: steps.probe.outputs.has_work == 'true'
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-1.62.1-linux
 
       - name: Install worker runtime
+        if: steps.probe.outputs.has_work == 'true'
         run: |
           npm install --no-save --package-lock=false --no-audit --no-fund playwright@1.62.1
           npx playwright install --with-deps chromium
 
       - name: Drain render queue
+        if: steps.probe.outputs.has_work == 'true'
         run: node scripts/render-worker.mjs
