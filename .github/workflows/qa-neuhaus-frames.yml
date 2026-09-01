@@ -1,0 +1,39 @@
+name: QA NEUHAUS Final Frames
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/qa-neuhaus-frames.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  frames:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract final MP4 frames
+        run: |
+          set -euo pipefail
+          URL='https://jiahshldcusphxtbqxpv.supabase.co/storage/v1/object/public/energy-media/1b6c9d54-48c7-4bda-bac0-5ede3c71e197/renders/7fb8ce58-3928-4ab4-8f28-16513c4ea114/fa5810f8-4dcc-4405-864e-35746a0c8e38.mp4'
+          curl -L --fail --retry 3 "$URL" -o /tmp/final.mp4
+          mkdir -p qa/neuhaus-rev92
+          ffmpeg -hide_banner -loglevel error -ss 1  -i /tmp/final.mp4 -frames:v 1 -q:v 2 /tmp/frame-01.jpg
+          ffmpeg -hide_banner -loglevel error -ss 8  -i /tmp/final.mp4 -frames:v 1 -q:v 2 /tmp/frame-08.jpg
+          ffmpeg -hide_banner -loglevel error -ss 15 -i /tmp/final.mp4 -frames:v 1 -q:v 2 /tmp/frame-15.jpg
+          ffmpeg -hide_banner -loglevel error -ss 22 -i /tmp/final.mp4 -frames:v 1 -q:v 2 /tmp/frame-22.jpg
+          base64 -w0 /tmp/frame-01.jpg > qa/neuhaus-rev92/frame-01.jpg.b64
+          base64 -w0 /tmp/frame-08.jpg > qa/neuhaus-rev92/frame-08.jpg.b64
+          base64 -w0 /tmp/frame-15.jpg > qa/neuhaus-rev92/frame-15.jpg.b64
+          base64 -w0 /tmp/frame-22.jpg > qa/neuhaus-rev92/frame-22.jpg.b64
+          ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height,bit_rate -show_entries format=duration,size,bit_rate -of json /tmp/final.mp4 > qa/neuhaus-rev92/ffprobe.json
+      - name: Commit QA evidence
+        run: |
+          git config user.name 'walkenhorst-video-qa'
+          git config user.email 'actions@users.noreply.github.com'
+          git add qa/neuhaus-rev92
+          git commit -m 'qa(video): store NEUHAUS final frame evidence' || exit 0
+          git push
