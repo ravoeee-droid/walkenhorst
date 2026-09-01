@@ -6,6 +6,8 @@ import { StudioV3Canvas } from "./studio-v3-canvas";
 
 type Props={timeline:StudioV3Timeline;brand:StudioV3BrandKit;variables:StudioV3LeadVariables;resolveSource?:(item:StudioV3Item)=>string|null;thumbnailWebsiteUrl?:string|null;thumbnailPresenterUrl?:string|null;onPlaybackStart?:()=>void;onProgress?:(mark:number)=>void};
 const speeds=[1,1.25,1.5,2];
+type EngagementDetail={positionSeconds:number;watchSeconds:number;percent:number;speed:number};
+function emit(name:string,detail:EngagementDetail){if(typeof window!=="undefined")window.dispatchEvent(new CustomEvent(`walkenhorst:${name}`,{detail}))}
 
 export function StudioV3PublicPlayer({timeline,brand,variables,resolveSource,thumbnailWebsiteUrl,thumbnailPresenterUrl,onPlaybackStart,onProgress}:Props){
  const[timeMs,setTimeMs]=useState(0);
@@ -16,18 +18,28 @@ export function StudioV3PublicPlayer({timeline,brand,variables,resolveSource,thu
  const anchor=useRef({wall:0,time:0});
  const started=useRef(false);
  const marks=useRef(new Set<number>());
+ const watchedMs=useRef(0);
+ const lastTick=useRef<number|null>(null);
+ const lastWatchEmit=useRef(0);
  const duration=Math.max(1000,timeline.durationMs),speed=speeds[speedIndex];
  const showPoster=!started.current&&!playing&&timeMs<40&&Boolean(thumbnailWebsiteUrl);
+ const detail=(position=timeMs):EngagementDetail=>({positionSeconds:Math.max(0,Math.round(position/1000)),watchSeconds:Math.max(0,Math.round(watchedMs.current/1000)),percent:Math.max(0,Math.min(100,Math.round(position/duration*100))),speed});
 
  useEffect(()=>{
-  if(!playing){if(raf.current)cancelAnimationFrame(raf.current);raf.current=null;return}
+  if(!playing){if(raf.current)cancelAnimationFrame(raf.current);raf.current=null;lastTick.current=null;return}
   anchor.current={wall:performance.now(),time:timeMs};
+  lastTick.current=performance.now();
   const tick=(now:number)=>{
+   const previous=lastTick.current??now;
+   const elapsed=Math.max(0,Math.min(1000,now-previous));
+   lastTick.current=now;
+   watchedMs.current+=elapsed;
    const next=Math.min(duration,anchor.current.time+(now-anchor.current.wall)*speed);
    setTimeMs(next);
    const percent=Math.round(next/duration*100);
    for(const mark of[25,50,75,90,100])if(percent>=mark&&!marks.current.has(mark)){marks.current.add(mark);onProgress?.(mark)}
-   if(next>=duration){setPlaying(false);return}
+   if(watchedMs.current-lastWatchEmit.current>=5000){lastWatchEmit.current=watchedMs.current;emit("video-watch",{positionSeconds:Math.round(next/1000),watchSeconds:Math.round(watchedMs.current/1000),percent,speed})}
+   if(next>=duration){emit("video-complete",{positionSeconds:Math.round(duration/1000),watchSeconds:Math.round(watchedMs.current/1000),percent:100,speed});setPlaying(false);return}
    raf.current=requestAnimationFrame(tick)
   };
   raf.current=requestAnimationFrame(tick);
@@ -35,17 +47,17 @@ export function StudioV3PublicPlayer({timeline,brand,variables,resolveSource,thu
  },[duration,onProgress,playing,speed]);
 
  function toggle(){
-  if(timeMs>=duration-20){setTimeMs(0);marks.current.clear();started.current=false}
+  if(timeMs>=duration-20){setTimeMs(0);marks.current.clear();started.current=false;watchedMs.current=0;lastWatchEmit.current=0}
   const nextPlaying=!playing;
   if(nextPlaying){
-   if(!started.current){started.current=true;onPlaybackStart?.()}
-   // Important for iOS Safari: start nested timeline media synchronously inside the user's click gesture.
+   if(!started.current){started.current=true;onPlaybackStart?.();emit("video-start",detail())}else emit("video-resume",detail());
    for(const media of Array.from(rootRef.current?.querySelectorAll("video:not([data-poster-video])")||[])){
     const video=media as HTMLVideoElement;
     video.playbackRate=speed;
     void video.play().catch(()=>undefined);
    }
   }else{
+   emit("video-pause",detail());
    for(const media of Array.from(rootRef.current?.querySelectorAll("video:not([data-poster-video])")||[]))(media as HTMLVideoElement).pause();
   }
   setPlaying(nextPlaying)
@@ -54,7 +66,8 @@ export function StudioV3PublicPlayer({timeline,brand,variables,resolveSource,thu
  function seek(next:number){
   const value=Math.min(Math.max(next,0),duration);
   setTimeMs(value);
-  anchor.current={wall:performance.now(),time:value}
+  anchor.current={wall:performance.now(),time:value};
+  emit("video-seek",detail(value))
  }
 
  async function fullscreen(){
