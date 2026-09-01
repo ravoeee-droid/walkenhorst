@@ -10,6 +10,7 @@ const H={
 };
 const out=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:H});
 const BUCKET="energy-media";
+const SLIDE_TIMINGS:Record<number,[number,number]>={1:[14200,25200],2:[25200,36200],3:[36200,46200],4:[46200,58200],5:[58200,69200],6:[69200,82200],7:[82200,93200],8:[93200,107000]};
 
 function env(){
   const url=Deno.env.get("SUPABASE_URL")!;
@@ -57,6 +58,40 @@ function safeVariables(lead:any,page:any,brand:any){
     cta:String(brand?.defaultCtaLabel||page?.cta_label||"Termin über WhatsApp anfragen"),
   };
 }
+function slideNumber(item:any){
+  const direct=Number(item?.metadata?.slide||0);
+  if(direct>=1&&direct<=8)return direct;
+  const m=String(item?.label||"").match(/Energiekosten\s*·\s*Clean\s*·\s*(0[1-8])/i);
+  return m?Number(m[1]):0;
+}
+function validateEnergiekostenTimeline(items:any[],page:any){
+  const forbidden=items.filter((item:any)=>!["website","presenter","audio","image"].includes(String(item?.type||"")));
+  if(forbidden.length)throw new Error(`Energiekosten-Render enthält verbotene Layer: ${forbidden.map((x:any)=>x.type).join(", ")}`);
+  const websites=items.filter((item:any)=>item?.type==="website");
+  const presenters=items.filter((item:any)=>item?.type==="presenter");
+  const slides=items.filter((item:any)=>item?.type==="image");
+  if(websites.length!==1)throw new Error(`Energiekosten-Master benötigt exakt 1 Website-Layer, gefunden: ${websites.length}`);
+  if(presenters.length!==1)throw new Error(`Energiekosten-Master benötigt exakt 1 B2B-Presenter, gefunden: ${presenters.length}`);
+  if(slides.length!==8)throw new Error(`Energiekosten-Master unvollständig: ${slides.length}/8 Clean-HD-Slides`);
+  const website=websites[0];
+  const presenter=presenters[0];
+  if(!website?.sourceUrl||String(website.sourceUrl)!==String(page.website_capture_url||""))throw new Error("Personalisierter Website-Screenshot ist nicht korrekt gebunden");
+  if(Number(website.startMs)!==0||Number(website.endMs)!==14200)throw new Error("Website-Screenshot hat falsches Zeitfenster");
+  if(String(presenter?.metadata?.audience||"")!=="b2b"||presenter?.metadata?.approved===false)throw new Error("B2B-Talking-Head fehlt");
+  if(Number(presenter.startMs)!==0||Number(presenter.endMs)!==107000)throw new Error("B2B-Talking-Head hat falsches Zeitfenster");
+  const seen=new Set<number>();
+  for(const slide of slides){
+    const n=slideNumber(slide);
+    if(!n||seen.has(n))throw new Error("Clean-HD-Slides sind doppelt oder falsch nummeriert");
+    seen.add(n);
+    const expected=SLIDE_TIMINGS[n];
+    if(Number(slide.startMs)!==expected[0]||Number(slide.endMs)!==expected[1])throw new Error(`Clean-HD-Slide ${n} hat falsches Zeitfenster`);
+    if(slide?.metadata?.clean_original!==true||slide?.metadata?.approved!==true)throw new Error(`Clean-HD-Slide ${n} ist nicht freigegeben`);
+    if(!/^Energiekosten\s*·\s*Clean\s*·\s*0[1-8]\s*·/i.test(String(slide.label||"")))throw new Error(`Clean-HD-Slide ${n} hat falsches Label`);
+    if(!String(slide.sourceUrl||"").includes("/storage/v1/object/public/energy-media/")||!String(slide.sourceUrl||"").includes("/template-slides/"))throw new Error(`Clean-HD-Slide ${n} ist nicht an das freigegebene Storage-Asset gebunden`);
+  }
+  if(seen.size!==8)throw new Error(`Energiekosten-Master unvollständig: ${seen.size}/8 Clean-HD-Slides`);
+}
 
 Deno.serve(async req=>{
   if(req.method==="OPTIONS")return new Response(null,{status:204,headers:H});
@@ -82,12 +117,7 @@ Deno.serve(async req=>{
       if(!timeline||Number(timeline.version)!==3||!Array.isArray(timeline.tracks))throw new Error("Finale Timeline fehlt");
       const items=timeline.tracks.flatMap((track:any)=>Array.isArray(track?.items)?track.items:[]).filter((item:any)=>!item?.hidden);
       if(String(page.template_key||"")==="energiekosten"){
-        const forbidden=items.filter((item:any)=>!["website","presenter","audio"].includes(String(item?.type||"")));
-        if(forbidden.length)throw new Error(`Energiekosten-Render enthält verbotene Layer: ${forbidden.map((x:any)=>x.type).join(", ")}`);
-        const website=items.find((item:any)=>item?.type==="website");
-        const presenter=items.find((item:any)=>item?.type==="presenter");
-        if(!website?.sourceUrl||String(website.sourceUrl)!==String(page.website_capture_url||""))throw new Error("Personalisierter Website-Screenshot ist nicht korrekt gebunden");
-        if(String(presenter?.metadata?.audience||"")!=="b2b")throw new Error("B2B-Talking-Head fehlt");
+        validateEnergiekostenTimeline(items,page);
         if(Number(page.website_capture_width||0)<1920||Number(page.website_capture_height||0)<1080||!["ready","verified"].includes(String(page.website_capture_status||"")))throw new Error("HD-Website-Screenshot ist nicht verifiziert");
         const{data:master,error:me}=await db.from("energy_studio_configs").select("autosave_revision,published_revision").eq("user_id",job.user_id).eq("scope","global").is("lead_id",null).eq("template_key","energiekosten").order("updated_at",{ascending:false}).limit(1).maybeSingle();
         if(me)throw me;
@@ -124,13 +154,13 @@ Deno.serve(async req=>{
       if(pageUpdate.error)throw pageUpdate.error;
       const existing=await db.from("energy_media_assets").select("id").eq("user_id",job.user_id).contains("metadata",{render_job_id:job.id}).limit(1).maybeSingle();
       if(!existing.data){
-        const asset=await db.from("energy_media_assets").insert({user_id:job.user_id,filename:`final-${job.lead_id}.mp4`,kind:"render",mime_type:"video/mp4",size_bytes:Number((object as any)?.metadata?.size||0)||null,storage_bucket:BUCKET,storage_path:path,label:"Finaler automatischer MP4-Render",metadata:{render_job_id:job.id,lead_id:job.lead_id,video_page_id:job.video_page_id,source:"github_actions_headless_mp4",width:Number(job.width||1920),height:Number(job.height||1080)}});
+        const asset=await db.from("energy_media_assets").insert({user_id:job.user_id,filename:`final-${job.lead_id}.mp4`,kind:"render",mime_type:"video/mp4",size_bytes:Number((object as any)?.metadata?.size||0)||null,storage_bucket:BUCKET,storage_path:path,label:"Finaler automatischer MP4-Render",metadata:{render_job_id:job.id,lead_id:job.lead_id,video_page_id:job.video_page_id,source:"github_actions_headless_mp4",width:Number(job.width||1920),height:Number(job.height||1080),template:"energiekosten",clean_hd_slides:8}});
         if(asset.error)throw asset.error;
       }
-      const metadata=cleanMetadata(job.metadata,{render_completed_at:now,render_mode:"final_mp4_only"});
+      const metadata=cleanMetadata(job.metadata,{render_completed_at:now,render_mode:"final_mp4_only",clean_hd_slides:8});
       const completed=await db.from("energy_render_jobs").update({status:"completed",progress:100,output_bucket:BUCKET,output_path:path,output_url:publicUrl,completed_at:now,error:null,locked_at:null,locked_by:null,metadata,updated_at:now}).eq("id",job.id);
       if(completed.error)throw completed.error;
-      await db.from("energy_activities").insert({user_id:job.user_id,lead_id:job.lead_id,activity_type:"video_rendered",title:"Finales MP4 automatisch gerendert",detail:"Website und B2B-Talking-Head wurden zu einer einzelnen MP4-Datei gerendert.",metadata:{render_job_id:job.id,video_page_id:job.video_page_id,output_url:publicUrl}});
+      await db.from("energy_activities").insert({user_id:job.user_id,lead_id:job.lead_id,activity_type:"video_rendered",title:"Finales MP4 automatisch gerendert",detail:"Website, acht freigegebene Clean-HD-Slides und B2B-Talking-Head wurden zu einer einzelnen MP4-Datei gerendert.",metadata:{render_job_id:job.id,video_page_id:job.video_page_id,output_url:publicUrl,clean_hd_slides:8}});
       return out({ok:true,status:"completed",outputUrl:publicUrl});
     }
 
