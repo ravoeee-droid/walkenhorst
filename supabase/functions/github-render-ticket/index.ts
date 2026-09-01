@@ -9,57 +9,21 @@ const ISSUER="https://token.actions.githubusercontent.com";
 const AUDIENCE="walkenhorst-render";
 const JWKS=createRemoteJWKSet(new URL("https://token.actions.githubusercontent.com/.well-known/jwks"));
 
-function admin(){
-  const url=Deno.env.get("SUPABASE_URL")!;
-  const secrets=Deno.env.get("SUPABASE_SECRET_KEYS");
-  const key=secrets?JSON.parse(secrets)?.default:Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  if(!url||!key)throw new Error("Backend configuration missing");
-  return createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}});
-}
+function admin(){const url=Deno.env.get("SUPABASE_URL")!;const secrets=Deno.env.get("SUPABASE_SECRET_KEYS");const key=secrets?JSON.parse(secrets)?.default:Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");if(!url||!key)throw new Error("Backend configuration missing");return createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}})}
 async function sha256(value:string){const bytes=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(value));return Array.from(new Uint8Array(bytes)).map(x=>x.toString(16).padStart(2,"0")).join("")}
-async function authorize(req:Request){
-  const header=req.headers.get("authorization")||"";
-  const token=header.toLowerCase().startsWith("bearer ")?header.slice(7).trim():"";
-  if(!token)throw new Error("GitHub OIDC token fehlt");
-  const{payload}=await jwtVerify(token,JWKS,{issuer:ISSUER,audience:AUDIENCE});
-  if(String(payload.repository||"")!==REPOSITORY)throw new Error("Falsches GitHub Repository");
-  if(String(payload.ref||"")!=="refs/heads/main")throw new Error("Render ist nur von main erlaubt");
-  return payload;
-}
-async function issue(db:ReturnType<typeof admin>,job:any){
-  if(!job?.id)throw new Error("Render-Job fehlt");
-  if(String(job.status)==="completed")return{jobId:job.id,status:"completed",token:null};
-  const token=`${crypto.randomUUID()}.${crypto.randomUUID()}`;
-  const hash=await sha256(token);
-  const expires=new Date(Date.now()+45*60*1000).toISOString();
-  const now=new Date().toISOString();
-  const metadata={...(job.metadata&&typeof job.metadata==="object"?job.metadata:{}),render_token_hash:hash,render_token_expires_at:expires,render_ticket_source:"github_oidc",render_ticket_issued_at:now,render_mode:"final_mp4_only"};
-  const{error}=await db.from("energy_render_jobs").update({status:"queued",progress:0,error:null,render_engine:"github-actions-headless-mp4",metadata,updated_at:now}).eq("id",job.id);
-  if(error)throw error;
-  return{jobId:job.id,status:"queued",token,expiresAt:expires};
-}
+async function authorize(req:Request){const header=req.headers.get("authorization")||"";const token=header.toLowerCase().startsWith("bearer ")?header.slice(7).trim():"";if(!token)throw new Error("GitHub OIDC token fehlt");const{payload}=await jwtVerify(token,JWKS,{issuer:ISSUER,audience:AUDIENCE});if(String(payload.repository||"")!==REPOSITORY)throw new Error("Falsches GitHub Repository");if(String(payload.ref||"")!=="refs/heads/main")throw new Error("Render ist nur von main erlaubt");return payload}
+function cleanMeta(raw:any,extra:Record<string,unknown>={}){const next={...(raw&&typeof raw==="object"?raw:{}),...extra};delete next.render_token_hash;delete next.render_token_expires_at;return next}
+function permanent(message:string){return /B2B-Talking-Head|B2B-Presenter|verbotene Layer|Finale Timeline fehlt|Video-Master ist veraltet|nicht veröffentlicht|nicht korrekt gebunden|erforderliches Asset fehlt|Golden Master/i.test(message)}
 
-Deno.serve(async req=>{
-  if(req.method==="OPTIONS")return new Response(null,{status:204,headers:H});
-  if(req.method!=="POST")return out({error:"Method not allowed"},405);
-  try{
-    const claims=await authorize(req);
-    const body=await req.json().catch(()=>({}));
-    const action=String(body?.action||"claim");
-    const db=admin();
-    if(action==="ticket"){
-      const jobId=String(body?.jobId||"").trim();
-      if(!jobId)return out({error:"jobId fehlt"},400);
-      const{data:job,error}=await db.from("energy_render_jobs").select("id,status,metadata,lead_id,video_page_id").eq("id",jobId).maybeSingle();
-      if(error||!job)throw error||new Error("Render-Job nicht gefunden");
-      return out({ok:true,...await issue(db,job),repository:claims.repository});
-    }
-    if(action==="claim"){
-      const{data:job,error}=await db.from("energy_render_jobs").select("id,status,metadata,lead_id,video_page_id,created_at").eq("status","queued").order("created_at",{ascending:true}).limit(1).maybeSingle();
-      if(error)throw error;
-      if(!job)return out({ok:true,status:"empty"});
-      return out({ok:true,...await issue(db,job),leadId:job.lead_id,videoPageId:job.video_page_id,repository:claims.repository});
-    }
-    return out({error:"Unbekannte Aktion"},400);
-  }catch(error){return out({error:error instanceof Error?error.message.slice(0,700):"GitHub render auth failed"},403)}
-});
+async function retryOrFail(db:ReturnType<typeof admin>,job:any,message:string,forcePermanent=false){const attempts=Number(job?.attempt_count||0);const maxAttempts=Math.max(1,Number(job?.max_attempts||4));const stop=forcePermanent||permanent(message)||attempts>=maxAttempts;const now=new Date();const meta=cleanMeta(job?.metadata,{last_worker_error:message.slice(0,700),last_worker_error_at:now.toISOString()});if(stop){const{error}=await db.from("energy_render_jobs").update({status:"failed",error:message.slice(0,700),completed_at:now.toISOString(),locked_at:null,locked_by:null,metadata:meta,updated_at:now.toISOString()}).eq("id",job.id);if(error)throw error;return{status:"failed",attempts,maxAttempts}}
+ const backoffMinutes=Math.min(15,Math.max(1,Math.pow(2,Math.max(0,attempts-1))));const next=new Date(now.getTime()+backoffMinutes*60000).toISOString();const{error}=await db.from("energy_render_jobs").update({status:"queued",progress:0,error:message.slice(0,700),next_attempt_at:next,locked_at:null,locked_by:null,completed_at:null,metadata:meta,updated_at:now.toISOString()}).eq("id",job.id);if(error)throw error;return{status:"retrying",attempts,maxAttempts,nextAttemptAt:next}}
+
+async function verifyCapture(db:ReturnType<typeof admin>,job:any){const{data:page,error}=await db.from("energy_video_pages").select("id,slug,template_key,website_capture_url,website_capture_status,website_capture_width,website_capture_height").eq("id",job.video_page_id).eq("user_id",job.user_id).maybeSingle();if(error||!page)throw error||new Error("Video-Seite fehlt");if(String(page.template_key)!=="energiekosten")throw new Error("Worker akzeptiert nur Energiekosten-Renderjobs");if(["ready","verified"].includes(String(page.website_capture_status||""))&&Number(page.website_capture_width||0)>=1920&&Number(page.website_capture_height||0)>=1080)return page;const url=String(page.website_capture_url||"").trim();if(!url)throw new Error("HD-Website-Screenshot URL fehlt");let response:Response;try{response=await fetch(url,{headers:{"user-agent":"WalkenhorstRenderWorker/1.0","cache-control":"no-cache"},signal:AbortSignal.timeout(70000)})}catch(e){const msg=`HD-Capture nicht erreichbar: ${e instanceof Error?e.message:"Netzwerkfehler"}`;await db.from("energy_video_pages").update({website_capture_status:"error",website_capture_error:msg.slice(0,700)}).eq("id",page.id);throw new Error(msg)}const width=Number(response.headers.get("x-capture-width")||0);const height=Number(response.headers.get("x-capture-height")||0);if(!response.ok||width<1920||height<1080){const detail=!response.ok?await response.text().catch(()=>""):"";await response.body?.cancel().catch(()=>undefined);const msg=`HD-Capture ungültig (${response.status}, ${width}x${height})${detail?`: ${detail.slice(0,180)}`:""}`;await db.from("energy_video_pages").update({website_capture_status:"error",website_capture_width:width||null,website_capture_height:height||null,website_capture_error:msg.slice(0,700)}).eq("id",page.id);throw new Error(msg)}await response.body?.cancel().catch(()=>undefined);const now=new Date().toISOString();const{error:updateError}=await db.from("energy_video_pages").update({website_capture_status:"verified",website_capture_verified_at:now,website_capture_width:width,website_capture_height:height,website_capture_error:null}).eq("id",page.id);if(updateError)throw updateError;return{...page,website_capture_status:"verified",website_capture_width:width,website_capture_height:height}}
+
+async function issue(db:ReturnType<typeof admin>,job:any,claims:any){const token=`${crypto.randomUUID()}.${crypto.randomUUID()}`;const hash=await sha256(token);const expires=new Date(Date.now()+45*60*1000).toISOString();const now=new Date().toISOString();const metadata={...(job.metadata&&typeof job.metadata==="object"?job.metadata:{}),render_token_hash:hash,render_token_expires_at:expires,render_ticket_source:"github_oidc",render_ticket_issued_at:now,github_run_id:String(claims.run_id||""),github_run_attempt:String(claims.run_attempt||""),render_mode:"final_mp4_only"};const{error}=await db.from("energy_render_jobs").update({status:"preparing",progress:Math.max(1,Number(job.progress||0)),error:null,render_engine:"github-actions-headless-mp4",metadata,updated_at:now}).eq("id",job.id);if(error)throw error;return{jobId:job.id,status:"claimed",token,expiresAt:expires,attempt:Number(job.attempt_count||0),maxAttempts:Number(job.max_attempts||4)}}
+
+Deno.serve(async req=>{if(req.method==="OPTIONS")return new Response(null,{status:204,headers:H});if(req.method!=="POST")return out({error:"Method not allowed"},405);try{const claims=await authorize(req);const body=await req.json().catch(()=>({}));const action=String(body?.action||"claim");const db=admin();
+ if(action==="claim"){await db.rpc("energy_recover_stale_render_jobs");const worker=String(body?.worker||`gha-${claims.run_id||claims.jti||"run"}`).slice(0,120);const{data,error}=await db.rpc("energy_claim_render_job",{p_worker:worker});if(error)throw error;const job=Array.isArray(data)?data[0]:data;if(!job)return out({ok:true,status:"empty"});try{await verifyCapture(db,job)}catch(e){const message=e instanceof Error?e.message:"HD-Capture fehlgeschlagen";return out({ok:true,jobId:job.id,...await retryOrFail(db,job,message),reason:message})}return out({ok:true,...await issue(db,job,claims),leadId:job.lead_id,videoPageId:job.video_page_id,repository:claims.repository})}
+ if(action==="runner_fail"){const jobId=String(body?.jobId||"").trim();const message=String(body?.error||"GitHub Render-Worker fehlgeschlagen").slice(0,700);if(!jobId)return out({error:"jobId fehlt"},400);const{data:job,error}=await db.from("energy_render_jobs").select("*").eq("id",jobId).maybeSingle();if(error||!job)throw error||new Error("Render-Job nicht gefunden");if(String(job.status)==="completed")return out({ok:true,status:"completed"});return out({ok:true,jobId,...await retryOrFail(db,job,message)})}
+ if(action==="ticket"){const jobId=String(body?.jobId||"").trim();if(!jobId)return out({error:"jobId fehlt"},400);const{data:job,error}=await db.from("energy_render_jobs").select("*").eq("id",jobId).maybeSingle();if(error||!job)throw error||new Error("Render-Job nicht gefunden");if(String(job.status)==="completed")return out({ok:true,status:"completed",jobId});await verifyCapture(db,job);return out({ok:true,...await issue(db,job,claims),repository:claims.repository})}
+ return out({error:"Unbekannte Aktion"},400)}catch(error){return out({error:error instanceof Error?error.message.slice(0,700):"GitHub render auth failed"},403)}});
