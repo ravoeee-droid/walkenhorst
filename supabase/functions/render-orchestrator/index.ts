@@ -97,7 +97,7 @@ Deno.serve(async req=>{
       const signed=await db.storage.from(BUCKET).createSignedUploadUrl(outputPath,{upsert:true});
       if(signed.error||!signed.data?.token)throw signed.error||new Error("Signierter Video-Upload konnte nicht erstellt werden");
       const now=new Date().toISOString();
-      await db.from("energy_render_jobs").update({status:"preparing",progress:2,started_at:job.started_at||now,error:null,render_engine:"vercel-headless-mp4",output_bucket:BUCKET,output_path:outputPath,updated_at:now}).eq("id",job.id);
+      await db.from("energy_render_jobs").update({status:"preparing",progress:2,started_at:job.started_at||now,error:null,render_engine:"github-actions-headless-mp4",output_bucket:BUCKET,output_path:outputPath,updated_at:now}).eq("id",job.id);
       const brand=page.brand_kit_snapshot&&typeof page.brand_kit_snapshot==="object"?page.brand_kit_snapshot:{};
       return out({ok:true,jobId:job.id,pageId:page.id,leadId:lead.id,timeline,brand,variables:safeVariables(lead,page,brand),upload:{bucket:BUCKET,path:outputPath,token:signed.data.token}});
     }
@@ -124,11 +124,11 @@ Deno.serve(async req=>{
       if(pageUpdate.error)throw pageUpdate.error;
       const existing=await db.from("energy_media_assets").select("id").eq("user_id",job.user_id).contains("metadata",{render_job_id:job.id}).limit(1).maybeSingle();
       if(!existing.data){
-        const asset=await db.from("energy_media_assets").insert({user_id:job.user_id,filename:`final-${job.lead_id}.mp4`,kind:"render",mime_type:"video/mp4",size_bytes:Number((object as any)?.metadata?.size||0)||null,storage_bucket:BUCKET,storage_path:path,label:"Finaler automatischer MP4-Render",metadata:{render_job_id:job.id,lead_id:job.lead_id,video_page_id:job.video_page_id,source:"vercel_headless_mp4",width:Number(job.width||1920),height:Number(job.height||1080)}});
+        const asset=await db.from("energy_media_assets").insert({user_id:job.user_id,filename:`final-${job.lead_id}.mp4`,kind:"render",mime_type:"video/mp4",size_bytes:Number((object as any)?.metadata?.size||0)||null,storage_bucket:BUCKET,storage_path:path,label:"Finaler automatischer MP4-Render",metadata:{render_job_id:job.id,lead_id:job.lead_id,video_page_id:job.video_page_id,source:"github_actions_headless_mp4",width:Number(job.width||1920),height:Number(job.height||1080)}});
         if(asset.error)throw asset.error;
       }
       const metadata=cleanMetadata(job.metadata,{render_completed_at:now,render_mode:"final_mp4_only"});
-      const completed=await db.from("energy_render_jobs").update({status:"completed",progress:100,output_bucket:BUCKET,output_path:path,output_url:publicUrl,completed_at:now,error:null,metadata,updated_at:now}).eq("id",job.id);
+      const completed=await db.from("energy_render_jobs").update({status:"completed",progress:100,output_bucket:BUCKET,output_path:path,output_url:publicUrl,completed_at:now,error:null,locked_at:null,locked_by:null,metadata,updated_at:now}).eq("id",job.id);
       if(completed.error)throw completed.error;
       await db.from("energy_activities").insert({user_id:job.user_id,lead_id:job.lead_id,activity_type:"video_rendered",title:"Finales MP4 automatisch gerendert",detail:"Website und B2B-Talking-Head wurden zu einer einzelnen MP4-Datei gerendert.",metadata:{render_job_id:job.id,video_page_id:job.video_page_id,output_url:publicUrl}});
       return out({ok:true,status:"completed",outputUrl:publicUrl});
@@ -138,7 +138,7 @@ Deno.serve(async req=>{
       const message=String(body?.error||"Rendering fehlgeschlagen").slice(0,700);
       const now=new Date().toISOString();
       const metadata=cleanMetadata(job.metadata,{render_failed_at:now});
-      await db.from("energy_render_jobs").update({status:"failed",error:message,completed_at:now,metadata,updated_at:now}).eq("id",job.id);
+      await db.from("energy_render_jobs").update({status:"failed",error:message,completed_at:now,locked_at:null,locked_by:null,metadata,updated_at:now}).eq("id",job.id);
       return out({ok:true,status:"failed"});
     }
 
