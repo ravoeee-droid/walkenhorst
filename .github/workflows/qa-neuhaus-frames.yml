@@ -15,38 +15,67 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Extract final MP4 frames
-        shell: bash
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install Chromium QA runtime
         run: |
-          set +e
+          npm install --no-save --package-lock=false --no-audit --no-fund playwright@1.62.1
+          npx playwright install --with-deps chromium
+      - name: Capture customer-visible final video frames
+        run: |
+          rm -rf qa/neuhaus-rev92
           mkdir -p qa/neuhaus-rev92
-          LOG='qa/neuhaus-rev92/qa.log'
-          : > "$LOG"
-          exec > >(tee -a "$LOG") 2>&1
-          URL='https://jiahshldcusphxtbqxpv.supabase.co/storage/v1/object/public/energy-media/1b6c9d54-48c7-4bda-bac0-5ede3c71e197/renders/7fb8ce58-3928-4ab4-8f28-16513c4ea114/fa5810f8-4dcc-4405-864e-35746a0c8e38.mp4'
-          echo 'Downloading final MP4...'
-          curl -L --fail --retry 3 --connect-timeout 20 --max-time 120 "$URL" -o /tmp/final.mp4
-          echo "curl_rc=$?"
-          ls -lh /tmp/final.mp4 || true
-          command -v ffmpeg || true
-          command -v ffprobe || true
-          for T in 1 8 15 22; do
-            OUT="/tmp/frame-${T}.png"
-            ffmpeg -y -hide_banner -loglevel error -ss "$T" -i /tmp/final.mp4 -frames:v 1 "$OUT"
-            RC=$?
-            echo "ffmpeg_${T}_rc=$RC"
-            if [ "$RC" -eq 0 ] && [ -s "$OUT" ]; then
-              base64 -w0 "$OUT" > "qa/neuhaus-rev92/frame-${T}.png.b64"
-              echo "frame_${T}_bytes=$(stat -c%s "$OUT")"
-            fi
-          done
-          ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height,bit_rate -show_entries format=duration,size,bit_rate -of json /tmp/final.mp4 > qa/neuhaus-rev92/ffprobe.json 2>>"$LOG"
-          echo "ffprobe_rc=$?"
-          exit 0
+          cat > /tmp/qa-frames.mjs <<'EOF'
+          import { chromium } from 'playwright';
+          import fs from 'node:fs';
+          const url='https://walkenhorst.vercel.app/v/neuhaus-neotec-maschinen-und-anlagenbau-gmbh-a3cf0c';
+          const browser=await chromium.launch({headless:true,args:['--autoplay-policy=no-user-gesture-required']});
+          const context=await browser.newContext({viewport:{width:1440,height:1000},deviceScaleFactor:1});
+          const page=await context.newPage();
+          const log=[];
+          page.on('console',m=>log.push(`console:${m.type()}: ${m.text()}`));
+          page.on('pageerror',e=>log.push(`pageerror: ${e.message}`));
+          try {
+            const response=await page.goto(url,{waitUntil:'domcontentloaded',timeout:90000});
+            log.push(`http=${response?.status()}`);
+            const video=page.locator('video').first();
+            await video.waitFor({state:'visible',timeout:60000});
+            await page.waitForFunction(()=>{const v=document.querySelector('video');return v && Number.isFinite(v.duration) && v.duration>20;},undefined,{timeout:60000});
+            const meta=await video.evaluate(v=>({src:v.currentSrc||v.src,duration:v.duration,videoWidth:v.videoWidth,videoHeight:v.videoHeight,readyState:v.readyState}));
+            fs.writeFileSync('qa/neuhaus-rev92/player-meta.json',JSON.stringify(meta,null,2));
+            for (const t of [1,8,15,22]) {
+              await video.evaluate(async(v,t)=>{
+                v.muted=true;
+                v.pause();
+                const done=new Promise((resolve,reject)=>{
+                  const timer=setTimeout(()=>reject(new Error(`seek ${t}s timeout`)),15000);
+                  const finish=()=>{clearTimeout(timer);v.removeEventListener('seeked',finish);resolve();};
+                  v.addEventListener('seeked',finish,{once:true});
+                });
+                v.currentTime=t;
+                await done;
+                await new Promise(r=>setTimeout(r,350));
+              },t);
+              const png=`/tmp/frame-${String(t).padStart(2,'0')}.png`;
+              await video.screenshot({path:png});
+              const bytes=fs.readFileSync(png);
+              fs.writeFileSync(`qa/neuhaus-rev92/frame-${String(t).padStart(2,'0')}.png.b64`,bytes.toString('base64'));
+              log.push(`frame_${t}_bytes=${bytes.length}`);
+            }
+          } catch(e) {
+            log.push(`fatal=${e?.stack||e}`);
+            process.exitCode=1;
+          } finally {
+            fs.writeFileSync('qa/neuhaus-rev92/qa.log',log.join('\n'));
+            await browser.close();
+          }
+          EOF
+          node /tmp/qa-frames.mjs || true
       - name: Commit QA evidence
         run: |
           git config user.name 'walkenhorst-video-qa'
           git config user.email 'actions@users.noreply.github.com'
           git add qa/neuhaus-rev92
-          git commit -m 'qa(video): store NEUHAUS final frame evidence' || exit 0
+          git commit -m 'qa(video): store Chromium-visible NEUHAUS frames' || exit 0
           git push
