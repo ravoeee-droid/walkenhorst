@@ -52,8 +52,18 @@ async function authorize(req: Request, db: DB) {
     : { ok: false as const, userId: null };
 }
 
-function firstName(v: any) {
-  return String(v || "").trim().split(/\s+/)[0] || "";
+const NAME_TITLE = /^(herr|frau|hr\.?|fr\.?|dr\.?|prof\.?|professor|dipl\.?-?ing\.?|dipl\.?|ing\.?|mag\.?|mba|m\.?sc\.?|b\.?sc\.?|ph\.?d\.?)$/i;
+function firstName(v: unknown) {
+  let raw = String(v || "").replace(/\s+/g, " ").trim();
+  if (!raw) return "";
+  if (raw.includes(",")) {
+    const parts = raw.split(",").map((x) => x.trim()).filter(Boolean);
+    if (parts.length > 1) raw = parts.slice(1).join(" ");
+  }
+  const tokens = raw.split(/\s+/).filter(Boolean);
+  while (tokens.length && NAME_TITLE.test(tokens[0].replace(/[,:;]+$/g, ""))) tokens.shift();
+  return (tokens[0] || "")
+    .replace(/^[^A-Za-zÀ-ÖØ-öø-ÿÄÖÜäöüß-]+|[^A-Za-zÀ-ÖØ-öø-ÿÄÖÜäöüß'-]+$/g, "");
 }
 
 function cleanReason(lead: any) {
@@ -165,6 +175,47 @@ async function chooseVariant(db: DB, c: any, member: any, step: any) {
   return data[0];
 }
 
+async function verifyWebsiteCapture(db: DB, page: any) {
+  const existingVerified = page?.website_capture_status === "verified" &&
+    Number(page?.website_capture_width || 0) >= 1920 &&
+    Number(page?.website_capture_height || 0) >= 1080 &&
+    Boolean(page?.website_capture_verified_at);
+  if (existingVerified) {
+    return { ok: true, width: Number(page.website_capture_width), height: Number(page.website_capture_height), cached: true };
+  }
+
+  const url = String(page?.website_capture_url || "").trim();
+  if (!/^https:\/\//i.test(url)) {
+    const reason = "Personalisierter Website-Screenshot fehlt";
+    if (page?.id) await db.from("energy_video_pages").update({ website_capture_status: "failed", website_capture_error: reason, website_capture_verified_at: null }).eq("id", page.id);
+    return { ok: false, reason };
+  }
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { accept: "image/webp,image/*;q=0.9,*/*;q=0.1" },
+      signal: AbortSignal.timeout(50000),
+    });
+    const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+    const width = Number(response.headers.get("x-capture-width") || 0);
+    const height = Number(response.headers.get("x-capture-height") || 0);
+    await response.body?.cancel().catch(() => undefined);
+    if (!response.ok || !contentType.startsWith("image/") || width < 1920 || height < 1080) {
+      const reason = `Website-Screenshot ungültig (${response.status}, ${contentType || "kein Bild"}, ${width}x${height})`;
+      await db.from("energy_video_pages").update({ website_capture_status: "failed", website_capture_error: reason.slice(0, 500), website_capture_verified_at: null, website_capture_width: width || null, website_capture_height: height || null }).eq("id", page.id);
+      return { ok: false, reason };
+    }
+    const now = new Date().toISOString();
+    await db.from("energy_video_pages").update({ website_capture_status: "verified", website_capture_error: null, website_capture_verified_at: now, website_capture_width: width, website_capture_height: height }).eq("id", page.id);
+    return { ok: true, width, height, cached: false };
+  } catch (error) {
+    const reason = `Website-Screenshot konnte nicht erzeugt werden: ${error instanceof Error ? error.message : "unbekannter Fehler"}`.slice(0, 500);
+    await db.from("energy_video_pages").update({ website_capture_status: "failed", website_capture_error: reason, website_capture_verified_at: null }).eq("id", page.id);
+    return { ok: false, reason };
+  }
+}
+
 async function readyVideo(db: DB, lead: any, c: any, base: string) {
   const templateKey = String(c?.lead_filter?.studio_template_key || "energiekosten").trim() || "energiekosten";
   const { data: cfg, error: ce } = await db
@@ -184,7 +235,7 @@ async function readyVideo(db: DB, lead: any, c: any, base: string) {
 
   const { data: p, error: pe } = await db
     .from("energy_video_pages")
-    .select("id,slug,rendered_video_url,rendered_video_format,rendered_at,studio_revision,status,timeline_v3")
+    .select("id,slug,rendered_video_url,rendered_video_format,rendered_at,studio_revision,status,timeline_v3,website_capture_url,website_capture_status,website_capture_verified_at,website_capture_width,website_capture_height,website_capture_error,presenter_video_url")
     .eq("user_id", c.user_id)
     .eq("lead_id", lead.id)
     .eq("template_key", templateKey)
@@ -196,11 +247,21 @@ async function readyVideo(db: DB, lead: any, c: any, base: string) {
 
   const revisionMatches = Boolean(p?.id && Number(p.studio_revision) === Number(cfg.autosave_revision));
   const timeline = p?.timeline_v3 as any;
+  const items = Array.isArray(timeline?.tracks) ? timeline.tracks.flatMap((track: any) => Array.isArray(track?.items) ? track.items : []) : [];
+  const websiteItem = items.find((item: any) => item?.type === "website");
+  const presenterItem = items.find((item: any) => item?.type === "presenter");
+  const noPresentationImages = templateKey !== "energiekosten" || !items.some((item: any) => item?.type === "image");
+  const b2bPresenter = templateKey !== "energiekosten" || String(presenterItem?.metadata?.audience || "") === "b2b";
+  const personalizedWebsite = templateKey !== "energiekosten" || Boolean(websiteItem?.sourceUrl && p?.website_capture_url && String(websiteItem.sourceUrl) === String(p.website_capture_url));
+
   const liveReady = Boolean(
     revisionMatches &&
       timeline &&
       Number(timeline.version) === 3 &&
-      Array.isArray(timeline.tracks),
+      Array.isArray(timeline.tracks) &&
+      noPresentationImages &&
+      b2bPresenter &&
+      personalizedWebsite,
   );
   const mp4Ready = Boolean(
     revisionMatches &&
@@ -210,7 +271,13 @@ async function readyVideo(db: DB, lead: any, c: any, base: string) {
   );
 
   if (!liveReady && !mp4Ready) {
-    return { ok: false, reason: `Live-Timeline oder finales MP4 für ${lead.company_name || lead.id} fehlt oder ist veraltet` };
+    return { ok: false, reason: `Personalisierte Live-Timeline oder finales MP4 für ${lead.company_name || lead.id} fehlt oder ist veraltet` };
+  }
+
+  let capture: any = { ok: true, width: null, height: null, cached: false };
+  if (templateKey === "energiekosten") {
+    capture = await verifyWebsiteCapture(db, p);
+    if (!capture.ok) return { ok: false, reason: capture.reason || "Website-Screenshot fehlt" };
   }
 
   return {
@@ -221,6 +288,8 @@ async function readyVideo(db: DB, lead: any, c: any, base: string) {
     studioRevision: Number(p.studio_revision),
     templateKey,
     deliveryMode: liveReady ? "live_timeline_v3" : "rendered_mp4",
+    captureWidth: capture.width,
+    captureHeight: capture.height,
   };
 }
 
@@ -369,6 +438,8 @@ async function processMember(db: DB, c: any, member: any, steps: any[], baseOver
           video_delivery_mode: video?.deliveryMode || null,
           studio_revision: video?.studioRevision || null,
           template_key: video?.templateKey || null,
+          website_capture_width: video?.captureWidth || null,
+          website_capture_height: video?.captureHeight || null,
           variant_id: variant?.id || null,
           variant_name: variant?.name || null,
         },
@@ -430,6 +501,8 @@ async function processMember(db: DB, c: any, member: any, steps: any[], baseOver
         mailbox: mailbox.email_address,
         studio_revision: video?.studioRevision || null,
         video_delivery_mode: video?.deliveryMode || null,
+        website_capture_width: video?.captureWidth || null,
+        website_capture_height: video?.captureHeight || null,
         variant_id: variant?.id || null,
       },
     });
