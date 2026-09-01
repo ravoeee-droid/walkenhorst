@@ -1,0 +1,19 @@
+{
+  "frame_size": [
+    858,
+    484
+  ],
+  "website_scroll": {
+    "background_mae": 1.057,
+    "changed_pixel_ratio": 0.00599,
+    "passes": false
+  },
+  "slide_01_fidelity": {
+    "psnr_db": 24.04,
+    "rendered_edge_strength": 5.291,
+    "source_edge_strength": 6.084,
+    "edge_retention_ratio": 0.8697,
+    "frame_15_to_22_background_mae": 0.804,
+    "passes": false
+  }
+}
