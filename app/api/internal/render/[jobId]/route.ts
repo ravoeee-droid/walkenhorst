@@ -27,7 +27,7 @@ async function runHeadlessRender(origin:string,jobId:string,token:string){
     const page=await browser.newPage();
     page.on("console",message=>console.log(`[render:${jobId}]`,message.type(),message.text()));
     page.on("pageerror",error=>console.error(`[render:${jobId}] pageerror`,error instanceof Error?error.message:String(error)));
-    const renderUrl=`${origin}/internal/render/${encodeURIComponent(jobId)}?token=${encodeURIComponent(token)}`;
+    const renderUrl=`${origin}/v/internal-render/${encodeURIComponent(jobId)}?token=${encodeURIComponent(token)}`;
     const response=await page.goto(renderUrl,{waitUntil:"domcontentloaded",timeout:60000});
     if(!response||response.status()>=400)throw new Error(`Render-Seite antwortet mit HTTP ${response?.status()||"unbekannt"}`);
     await page.waitForFunction(()=>["completed","failed"].includes(document.documentElement.dataset.renderStatus||""),{timeout:280000,polling:1000});
