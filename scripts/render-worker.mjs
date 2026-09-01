@@ -17,10 +17,7 @@ async function githubOidcToken() {
   if (!requestUrl || !requestToken) throw new Error("GitHub OIDC environment is unavailable.");
   const url = new URL(requestUrl);
   url.searchParams.set("audience", AUDIENCE);
-  const response = await fetch(url, {
-    headers: { Authorization: `Bearer ${requestToken}` },
-    signal: AbortSignal.timeout(20_000),
-  });
+  const response = await fetch(url, { headers: { Authorization: `Bearer ${requestToken}` }, signal: AbortSignal.timeout(20_000) });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || !data?.value) throw new Error(`GitHub OIDC token request failed (${response.status}).`);
   return String(data.value);
@@ -30,10 +27,7 @@ async function ticket(action, payload = {}) {
   const oidc = await githubOidcToken();
   const response = await fetch(EDGE_URL, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${oidc}`,
-    },
+    headers: { "content-type": "application/json", authorization: `Bearer ${oidc}` },
     body: JSON.stringify({ action, ...payload }),
     signal: AbortSignal.timeout(90_000),
   });
@@ -71,7 +65,7 @@ async function safeWebsiteUrl(raw) {
   return url.toString();
 }
 
-async function uploadCapture(jobId, bytes) {
+async function uploadCapture(jobId, bytes, width = CAPTURE_WIDTH, height = CAPTURE_HEIGHT) {
   const oidc = await githubOidcToken();
   const url = new URL(EDGE_URL);
   url.searchParams.set("action", "upload_capture");
@@ -81,8 +75,8 @@ async function uploadCapture(jobId, bytes) {
     headers: {
       authorization: `Bearer ${oidc}`,
       "content-type": "image/webp",
-      "x-capture-width": String(CAPTURE_WIDTH),
-      "x-capture-height": String(CAPTURE_HEIGHT),
+      "x-capture-width": String(width),
+      "x-capture-height": String(height),
     },
     body: bytes,
     signal: AbortSignal.timeout(120_000),
@@ -92,11 +86,37 @@ async function uploadCapture(jobId, bytes) {
   return data;
 }
 
+async function freezeLegacyCapture(claim) {
+  const capture = claim?.capture || {};
+  const url = String(capture.captureUrl || "");
+  const width = Number(capture.width || 0);
+  const height = Number(capture.height || 0);
+  if (!url || width < 1920 || height < 1080 || url.includes("/storage/v1/object/public/")) return null;
+  try {
+    const response = await fetch(url, { headers: { accept: "image/webp,image/*" }, signal: AbortSignal.timeout(90_000) });
+    if (!response.ok) throw new Error(`Legacy-Capture HTTP ${response.status}`);
+    const type = String(response.headers.get("content-type") || "");
+    if (!type.startsWith("image/")) throw new Error(`Legacy-Capture hat falschen Content-Type: ${type || "unbekannt"}`);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength < 30_000) throw new Error(`Legacy-Capture ist verdächtig klein (${bytes.byteLength} Bytes)`);
+    const stored = await uploadCapture(String(claim.jobId), bytes, width, height);
+    console.log(`[${claim.jobId}] legacy HD capture frozen · ${stored.width}x${stored.height} · ${stored.bytes} bytes`);
+    return stored.captureUrl;
+  } catch (error) {
+    console.log(`[${claim.jobId}] legacy capture freeze skipped: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}
+
 async function materializeCapture(browser, claim) {
   if (claim?.capture?.ready) {
     console.log(`[${claim.jobId}] static HD capture already verified`);
     return claim.capture.captureUrl;
   }
+
+  const frozen = await freezeLegacyCapture(claim);
+  if (frozen) return frozen;
+
   const websiteUrl = await safeWebsiteUrl(claim?.capture?.websiteUrl);
   const context = await browser.newContext({
     viewport: { width: CAPTURE_WIDTH, height: CAPTURE_HEIGHT },
@@ -112,6 +132,8 @@ async function materializeCapture(browser, claim) {
       try {
         const parsed = new URL(requestUrl);
         if (!["http:", "https:", "data:", "blob:"].includes(parsed.protocol)) return route.abort();
+        const host = parsed.hostname.toLowerCase();
+        if (host === "localhost" || host.endsWith(".local") || host.endsWith(".internal") || (net.isIPv4(host) && privateIpv4(host)) || (net.isIPv6(host) && privateIpv6(host))) return route.abort();
       } catch {
         return route.abort();
       }
@@ -130,7 +152,7 @@ async function materializeCapture(browser, claim) {
     }).catch(() => undefined);
     const bytes = await page.screenshot({ type: "webp", quality: 92, fullPage: false, animations: "disabled" });
     if (bytes.byteLength < 30_000) throw new Error(`HD-Capture ist verdächtig klein (${bytes.byteLength} Bytes).`);
-    const stored = await uploadCapture(String(claim.jobId), bytes);
+    const stored = await uploadCapture(String(claim.jobId), bytes, CAPTURE_WIDTH, CAPTURE_HEIGHT);
     console.log(`[${claim.jobId}] static HD capture stored · ${stored.width}x${stored.height} · ${stored.bytes} bytes`);
     return stored.captureUrl;
   } finally {
@@ -154,29 +176,20 @@ async function renderJob(browser, claim) {
   const jobId = String(claim.jobId || "");
   const token = String(claim.token || "");
   if (!jobId || !token) throw new Error("Claim returned no render token.");
-
   await materializeCapture(browser, claim);
 
-  const context = await browser.newContext({
-    viewport: { width: 1440, height: 900 },
-    deviceScaleFactor: 1,
-  });
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
   const page = await context.newPage();
   page.on("console", (message) => {
     const text = message.text();
     if (message.type() === "error" || /render|mp4|asset|capture/i.test(text)) console.log(`[${jobId}] browser:${message.type()} ${text}`);
   });
   page.on("pageerror", (error) => console.error(`[${jobId}] pageerror`, error.message));
-
   try {
     const renderUrl = `${APP_URL}/v/internal-render/${encodeURIComponent(jobId)}?token=${encodeURIComponent(token)}`;
     const response = await page.goto(renderUrl, { waitUntil: "domcontentloaded", timeout: 90_000 });
     if (!response || response.status() >= 400) throw new Error(`Render page returned HTTP ${response?.status() || "unknown"}.`);
-    await page.waitForFunction(
-      () => ["completed", "failed"].includes(document.documentElement.dataset.renderStatus || ""),
-      undefined,
-      { timeout: JOB_TIMEOUT_MS, polling: 1000 },
-    );
+    await page.waitForFunction(() => ["completed", "failed"].includes(document.documentElement.dataset.renderStatus || ""), undefined, { timeout: JOB_TIMEOUT_MS, polling: 1000 });
     const state = await page.evaluate(() => ({ status: document.documentElement.dataset.renderStatus || "", error: document.documentElement.dataset.renderError || "" }));
     if (state.status !== "completed") throw new Error(state.error || "Browser render reported failed status.");
     console.log(`[${jobId}] completed`);
@@ -197,16 +210,12 @@ async function main() {
     headless: true,
     args: ["--autoplay-policy=no-user-gesture-required", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows"],
   });
-
   let completed = 0;
   let handled = 0;
   try {
     for (let i = 0; i < MAX_JOBS; i += 1) {
       const claim = await ticket("claim", { worker: WORKER });
-      if (claim.status === "empty") {
-        console.log("Queue empty.");
-        break;
-      }
+      if (claim.status === "empty") { console.log("Queue empty."); break; }
       if (claim.status === "retrying" || claim.status === "failed") {
         handled += 1;
         console.log(`[${claim.jobId}] preflight ${claim.status}: ${claim.reason || "validation/capture error"}`);
