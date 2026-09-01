@@ -1,0 +1,98 @@
+name: QA NEUHAUS Metrics
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/qa-neuhaus-metrics.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  metrics:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install image metrics runtime
+        run: python -m pip install --quiet pillow numpy
+      - name: Measure final customer-visible video
+        run: |
+          python - <<'PY'
+          import base64, json, math, urllib.request
+          from pathlib import Path
+          import numpy as np
+          from PIL import Image
+
+          root=Path('qa/neuhaus-rev92')
+          def decode(name):
+              raw=base64.b64decode((root/name).read_text())
+              out=Path('/tmp')/name.replace('.b64','')
+              out.write_bytes(raw)
+              return Image.open(out).convert('RGB')
+
+          f1=decode('frame-01.png.b64')
+          f8=decode('frame-08.png.b64')
+          f15=decode('frame-15.png.b64')
+          f22=decode('frame-22.png.b64')
+          w,h=f1.size
+
+          # Website scroll: only inspect top-left background, never the presenter bubble.
+          box=(0,0,int(w*0.72),int(h*0.82))
+          a=np.asarray(f1.crop(box),dtype=np.float32)
+          b=np.asarray(f8.crop(box),dtype=np.float32)
+          delta=np.abs(a-b)
+          scroll_mae=float(delta.mean())
+          changed=float((delta.mean(axis=2)>8).mean())
+
+          # Slide fidelity: compare customer-visible frame with the approved clean source,
+          # excluding the presenter bubble and the short transition edge.
+          slide_url='https://jiahshldcusphxtbqxpv.supabase.co/storage/v1/object/public/energy-media/1b6c9d54-48c7-4bda-bac0-5ede3c71e197/template-slides/70c35ad9-2b6f-4009-b606-e6040e1b159d-energiekosten-clean-01.png'
+          urllib.request.urlretrieve(slide_url,'/tmp/slide1.png')
+          expected=Image.open('/tmp/slide1.png').convert('RGB').resize(f22.size,Image.Resampling.LANCZOS)
+          sbox=(0,0,int(w*0.70),int(h*0.82))
+          actual=np.asarray(f22.crop(sbox),dtype=np.float32)
+          target=np.asarray(expected.crop(sbox),dtype=np.float32)
+          mse=float(np.mean((actual-target)**2))
+          psnr=99.0 if mse==0 else float(20*math.log10(255.0/math.sqrt(mse)))
+
+          def edge_strength(arr):
+              gray=arr.mean(axis=2)
+              gx=np.abs(np.diff(gray,axis=1)).mean()
+              gy=np.abs(np.diff(gray,axis=0)).mean()
+              return float((gx+gy)/2)
+          actual_edge=edge_strength(actual)
+          target_edge=edge_strength(target)
+          edge_ratio=float(actual_edge/target_edge) if target_edge else 0.0
+
+          stable_a=np.asarray(f15.crop(sbox),dtype=np.float32)
+          stable_b=np.asarray(f22.crop(sbox),dtype=np.float32)
+          slide_stability_mae=float(np.abs(stable_a-stable_b).mean())
+
+          metrics={
+            'frame_size':[w,h],
+            'website_scroll':{
+              'background_mae':round(scroll_mae,3),
+              'changed_pixel_ratio':round(changed,5),
+              'passes': bool(scroll_mae>4 and changed>0.08)
+            },
+            'slide_01_fidelity':{
+              'psnr_db':round(psnr,3),
+              'rendered_edge_strength':round(actual_edge,3),
+              'source_edge_strength':round(target_edge,3),
+              'edge_retention_ratio':round(edge_ratio,4),
+              'frame_15_to_22_background_mae':round(slide_stability_mae,3),
+              'passes': bool(psnr>25 and edge_ratio>0.82)
+            }
+          }
+          (root/'metrics.json').write_text(json.dumps(metrics,indent=2))
+          print(json.dumps(metrics,indent=2))
+          PY
+      - name: Commit metrics
+        run: |
+          git config user.name 'walkenhorst-video-qa'
+          git config user.email 'actions@users.noreply.github.com'
+          git add qa/neuhaus-rev92/metrics.json
+          git commit -m 'qa(video): store NEUHAUS scroll and sharpness metrics' || exit 0
+          git push
