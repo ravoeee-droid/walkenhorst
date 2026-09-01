@@ -20,5 +20,6 @@ export async function GET(req: NextRequest, context: { params: Promise<{ token: 
     return new Response("Link konnte nicht bestätigt werden.", { status: tracked.status === 403 ? 403 : 503, headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
   }
 
+  if (parsed.pathname.startsWith("/v/")) parsed.searchParams.set("mt", token);
   return Response.redirect(parsed.toString(), 302);
 }
