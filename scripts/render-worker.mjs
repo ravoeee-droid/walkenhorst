@@ -9,7 +9,8 @@ const MAX_JOBS = Math.max(1, Math.min(6, Number(process.env.MAX_JOBS_PER_RUN || 
 const JOB_TIMEOUT_MS = Math.max(240_000, Number(process.env.RENDER_JOB_TIMEOUT_MS || 900_000));
 const WORKER = `gha-${process.env.GITHUB_RUN_ID || "local"}-${process.env.GITHUB_RUN_ATTEMPT || "1"}-${process.env.WORKER_SLOT || "1"}`;
 const CAPTURE_WIDTH = 1920;
-const CAPTURE_HEIGHT = 1080;
+const CAPTURE_VIEWPORT_HEIGHT = 1080;
+const MAX_CAPTURE_HEIGHT = 12000;
 
 async function githubOidcToken() {
   const requestUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
@@ -65,7 +66,7 @@ async function safeWebsiteUrl(raw) {
   return url.toString();
 }
 
-async function uploadCapture(jobId, bytes, width = CAPTURE_WIDTH, height = CAPTURE_HEIGHT) {
+async function uploadCapture(jobId, bytes, width, height) {
   const oidc = await githubOidcToken();
   const url = new URL(EDGE_URL);
   url.searchParams.set("action", "upload_capture");
@@ -91,7 +92,7 @@ async function freezeLegacyCapture(claim) {
   const url = String(capture.captureUrl || "");
   const width = Number(capture.width || 0);
   const height = Number(capture.height || 0);
-  if (!url || width < 1920 || height < 1080 || url.includes("/storage/v1/object/public/")) return null;
+  if (!url || width < 1920 || height <= CAPTURE_VIEWPORT_HEIGHT || url.includes("/storage/v1/object/public/")) return null;
   try {
     const response = await fetch(url, { headers: { accept: "image/webp,image/*" }, signal: AbortSignal.timeout(90_000) });
     if (!response.ok) throw new Error(`Legacy-Capture HTTP ${response.status}`);
@@ -100,7 +101,7 @@ async function freezeLegacyCapture(claim) {
     const bytes = new Uint8Array(await response.arrayBuffer());
     if (bytes.byteLength < 30_000) throw new Error(`Legacy-Capture ist verdächtig klein (${bytes.byteLength} Bytes)`);
     const stored = await uploadCapture(String(claim.jobId), bytes, width, height);
-    console.log(`[${claim.jobId}] legacy HD capture frozen · ${stored.width}x${stored.height} · ${stored.bytes} bytes`);
+    console.log(`[${claim.jobId}] legacy full-page capture frozen · ${stored.width}x${stored.height} · ${stored.bytes} bytes`);
     return stored.captureUrl;
   } catch (error) {
     console.log(`[${claim.jobId}] legacy capture freeze skipped: ${error instanceof Error ? error.message : String(error)}`);
@@ -109,8 +110,8 @@ async function freezeLegacyCapture(claim) {
 }
 
 async function materializeCapture(browser, claim) {
-  if (claim?.capture?.ready) {
-    console.log(`[${claim.jobId}] static HD capture already verified`);
+  if (claim?.capture?.ready && Number(claim?.capture?.height || 0) > CAPTURE_VIEWPORT_HEIGHT) {
+    console.log(`[${claim.jobId}] static full-page HD capture already verified`);
     return claim.capture.captureUrl;
   }
 
@@ -119,7 +120,7 @@ async function materializeCapture(browser, claim) {
 
   const websiteUrl = await safeWebsiteUrl(claim?.capture?.websiteUrl);
   const context = await browser.newContext({
-    viewport: { width: CAPTURE_WIDTH, height: CAPTURE_HEIGHT },
+    viewport: { width: CAPTURE_WIDTH, height: CAPTURE_VIEWPORT_HEIGHT },
     deviceScaleFactor: 1,
     userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
     locale: "de-DE",
@@ -142,7 +143,7 @@ async function materializeCapture(browser, claim) {
     const response = await page.goto(websiteUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
     if (!response) throw new Error("Website antwortet nicht.");
     if (response.status() >= 400) throw new Error(`Website antwortet mit HTTP ${response.status()}.`);
-    await page.waitForTimeout(2500);
+    await page.waitForTimeout(3000);
     await page.evaluate(() => {
       window.scrollTo(0, 0);
       for (const el of document.querySelectorAll("[style*='position: fixed'], [style*='position:fixed']")) {
@@ -150,10 +151,23 @@ async function materializeCapture(browser, claim) {
         if (/cookie|consent|datenschutz|privacy/.test(text)) el.remove();
       }
     }).catch(() => undefined);
-    const bytes = await page.screenshot({ type: "webp", quality: 92, fullPage: false, animations: "disabled" });
+    const documentHeight = await page.evaluate(() => Math.max(
+      document.documentElement.scrollHeight,
+      document.body?.scrollHeight || 0,
+      document.documentElement.offsetHeight,
+      document.body?.offsetHeight || 0,
+    ));
+    const captureHeight = Math.max(CAPTURE_VIEWPORT_HEIGHT, Math.min(MAX_CAPTURE_HEIGHT, Math.ceil(Number(documentHeight) || CAPTURE_VIEWPORT_HEIGHT)));
+    const bytes = await page.screenshot({
+      type: "webp",
+      quality: 94,
+      clip: { x: 0, y: 0, width: CAPTURE_WIDTH, height: captureHeight },
+      animations: "disabled",
+      captureBeyondViewport: true,
+    });
     if (bytes.byteLength < 30_000) throw new Error(`HD-Capture ist verdächtig klein (${bytes.byteLength} Bytes).`);
-    const stored = await uploadCapture(String(claim.jobId), bytes, CAPTURE_WIDTH, CAPTURE_HEIGHT);
-    console.log(`[${claim.jobId}] static HD capture stored · ${stored.width}x${stored.height} · ${stored.bytes} bytes`);
+    const stored = await uploadCapture(String(claim.jobId), bytes, CAPTURE_WIDTH, captureHeight);
+    console.log(`[${claim.jobId}] static full-page HD capture stored · ${stored.width}x${stored.height} · ${stored.bytes} bytes`);
     return stored.captureUrl;
   } finally {
     await context.close().catch(() => undefined);
