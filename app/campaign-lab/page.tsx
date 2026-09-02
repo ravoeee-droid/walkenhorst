@@ -1,8 +1,8 @@
 "use client";
 
 import { AuthGate } from "@/components/auth-gate";
-import { CampaignLab } from "@/components/campaign-lab";
+import { LaunchCampaign } from "@/components/launch-campaign";
 
-export default function CampaignLabPage(){
-  return <AuthGate>{user=><CampaignLab user={user}/>}</AuthGate>;
+export default function CampaignLabPage() {
+  return <AuthGate>{(user) => <LaunchCampaign user={user} />}</AuthGate>;
 }
