@@ -19,7 +19,9 @@ jobs:
         with:
           node-version: '22'
       - name: Apply cleanup
-        run: python scripts/live_loom_cleanup.py
+        run: |
+          sed -i 's/re.subn(pattern, repl, text, count=1, flags=flags)/re.subn(pattern, lambda m: repl, text, count=1, flags=flags)/' scripts/live_loom_cleanup.py
+          python scripts/live_loom_cleanup.py
       - name: Verify
         run: |
           npm ci
