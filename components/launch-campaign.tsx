@@ -15,12 +15,21 @@ type Metrics = {
   bounced: number;
 };
 
+type VideoReadiness = {
+  required?: number;
+  ready?: number;
+  liveReady?: number;
+  mp4Ready?: number;
+  pending?: number;
+};
+
 type Campaign = {
   id: string;
   name: string;
   status: "draft" | "active" | "paused" | "completed";
   created_at: string;
   metrics: Metrics;
+  videoReadiness?: VideoReadiness;
 };
 
 type Mailbox = {
@@ -39,23 +48,36 @@ type AdminLoad = {
   leadCount: number;
 };
 
-const SUBJECT = "{{firstname}}, kurze Frage zu {{company}}";
+type PublishResult = {
+  ok?: boolean;
+  prepared?: number;
+  failed?: number;
+  liveCaptures?: number;
+  staticCaptures?: number;
+  results?: Array<{ leadId?: string; url?: string; error?: string }>;
+  error?: string;
+};
+
+const SUBJECT = "{{firstname}}, ich habe Ihnen zu {{company}} kurz etwas aufgenommen";
 const BODY = `Guten Tag {{firstname}},
 
-ich habe mir {{company}} in {{city}} kurz angesehen. {{reason}}
+ich habe mir {{company}} in {{city}} angesehen und Ihnen dazu ein kurzes persönliches Video aufgenommen.
 
-Ich wollte deshalb einmal direkt fragen: Ist das Thema Energiekosten bzw. PV für Ihren Betrieb aktuell grundsätzlich interessant?
+Hier sind die 107 Sekunden:
+{{video_url}}
 
-Wenn ja, schicke ich Ihnen die wichtigsten Punkte kompakt rüber.
+Ich zeige darin direkt an Ihrem Unternehmen, welche Punkte wir bei Energiekosten und PV zuerst prüfen würden. Wenn bei Ihnen bereits alles optimal gelöst ist, können wir das Thema danach direkt abhaken.
 
 Viele Grüße
-Andreas Walkenhorst`;
+Andreas Walkenhorst
+Walkenhorst Energie`;
 
 const FOLLOWUP_BODY = `Guten Tag {{firstname}},
 
-ich wollte meine kurze Nachricht zu {{company}} noch einmal nach oben holen.
+ich wollte mein kurzes Video zu {{company}} noch einmal nach oben holen:
+{{video_url}}
 
-Falls Energie- und PV-Potenzial aktuell ein Thema ist, genügt ein kurzes „ja“ – dann schicke ich Ihnen die Punkte kompakt zusammen.
+Falls Energie- oder PV-Potenzial aktuell kein Thema ist, ist das völlig in Ordnung. Wenn doch, reichen danach 15 Minuten für einen ersten Abgleich.
 
 Viele Grüße
 Andreas Walkenhorst`;
@@ -80,6 +102,7 @@ export function LaunchCampaign({ user: _user }: { user: User }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [progress, setProgress] = useState<string | null>(null);
 
   const callAdmin = useCallback(async (body: Record<string, unknown>) => {
     if (!supabase) throw new Error("Supabase ist nicht konfiguriert.");
@@ -87,6 +110,22 @@ export function LaunchCampaign({ user: _user }: { user: User }) {
     if (invokeError) throw new Error(invokeError.message || "Campaign Backend nicht erreichbar.");
     if (data?.error) throw new Error(String(data.error));
     return data;
+  }, [supabase]);
+
+  const publishCampaign = useCallback(async (campaignId: string) => {
+    if (!supabase) throw new Error("Supabase ist nicht konfiguriert.");
+    const { data, error: invokeError } = await supabase.functions.invoke("lead-publish", {
+      body: {
+        action: "prepare_campaign",
+        campaignId,
+        baseUrl: window.location.origin,
+        limit: 30,
+      },
+    });
+    if (invokeError) throw new Error(invokeError.message || "Loom-Videos konnten nicht vorbereitet werden.");
+    const result = (data || {}) as PublishResult;
+    if (result.error) throw new Error(result.error);
+    return result;
   }, [supabase]);
 
   const load = useCallback(async () => {
@@ -125,12 +164,13 @@ export function LaunchCampaign({ user: _user }: { user: User }) {
     setBusy(true);
     setError(null);
     setMessage(null);
+    setProgress("30 passende Gewerbe-Leads werden ausgewählt …");
 
     try {
       const date = new Intl.DateTimeFormat("de-DE", { day: "2-digit", month: "2-digit" }).format(new Date());
       const created = await callAdmin({
         action: "create",
-        name: `Walkenhorst Pilot ${date}`,
+        name: `Walkenhorst Loom Pilot ${date}`,
         audience: {
           customerType: "commercial",
           source: "",
@@ -142,25 +182,26 @@ export function LaunchCampaign({ user: _user }: { user: User }) {
         sendIntervalMinutes: 7,
         sendWindowStart: "08:30",
         sendWindowEnd: "17:30",
-        includeVideo: false,
+        includeVideo: true,
+        studioTemplateKey: "energiekosten",
         mailboxIds: readyMailboxes.map((mailbox) => mailbox.id),
         trackingBaseUrl: window.location.origin,
         subject: SUBJECT,
         body: BODY,
         steps: [
           {
-            stepType: "email",
+            stepType: "video_email",
             delayHours: 0,
             subject: SUBJECT,
             body: BODY,
-            includeVideo: false,
+            includeVideo: true,
           },
           {
             stepType: "email",
             delayHours: 72,
             subject: "Kurze Ergänzung zu {{company}}",
             body: FOLLOWUP_BODY,
-            includeVideo: false,
+            includeVideo: true,
           },
           {
             stepType: "manual_call",
@@ -175,11 +216,25 @@ export function LaunchCampaign({ user: _user }: { user: User }) {
       const campaignId = String(created?.campaignId || "");
       if (!campaignId) throw new Error("Kampagne wurde angelegt, aber ohne Kampagnen-ID zurückgegeben.");
 
+      const audienceCount = Number(created?.audienceCount || 0);
+      setProgress(`${audienceCount} persönliche Loom-Videos werden aus dem Golden Master gebaut …`);
+      const published = await publishCampaign(campaignId);
+      const prepared = Number(published.prepared || 0);
+      const failed = Number(published.failed || 0);
+
+      if (failed > 0 || prepared < audienceCount) {
+        const examples = (published.results || []).filter((row) => row.error).slice(0, 3).map((row) => row.error).filter(Boolean);
+        throw new Error(`Video-Preflight gestoppt: ${prepared}/${audienceCount} Looms bereit${examples.length ? ` · ${examples.join(" · ")}` : ""}. Es wurde noch nichts versendet.`);
+      }
+
+      setProgress(`${prepared}/${audienceCount} Looms bereit. Versand wird freigegeben …`);
       await callAdmin({ action: "start", id: campaignId });
-      setMessage(`Pilot gestartet: ${Number(created?.audienceCount || 0)} frische Gewerbe-Leads, max. 30 E-Mails pro Tag. Kein Video-Renderer nötig.`);
+      setMessage(`Loom-Pilot gestartet: ${prepared} personalisierte Videos bereit · Website + Andreas Talking Head · max. 30 Video-Mails pro Tag.`);
+      setProgress(null);
       await load();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Pilot konnte nicht gestartet werden.");
+      setError(cause instanceof Error ? cause.message : "Loom-Pilot konnte nicht gestartet werden.");
+      setProgress(null);
     } finally {
       setBusy(false);
     }
@@ -191,7 +246,7 @@ export function LaunchCampaign({ user: _user }: { user: User }) {
     setMessage(null);
     try {
       const data = await callAdmin({ action: "run", id });
-      setMessage(data?.worker?.sent ? "Nächste fällige Nachricht wurde versendet." : "Geprüft: Aktuell ist keine Nachricht fällig.");
+      setMessage(data?.worker?.sent ? "Nächste fällige Video-Mail wurde versendet." : "Geprüft: Aktuell ist keine Nachricht fällig.");
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Worker konnte nicht geprüft werden.");
@@ -204,15 +259,16 @@ export function LaunchCampaign({ user: _user }: { user: User }) {
     <main className={styles.page}>
       <section className={styles.hero}>
         <div>
-          <div className={styles.kicker}>Walkenhorst Outbound · Launch Mode</div>
-          <h1>30 gute Leads. Eine Kampagne. Antworten erzeugen.</h1>
-          <p>Kein Studio, kein Rendern, kein Technik-Zirkus. Der Pilot nutzt eine kurze personalisierte E-Mail, ein automatisches Follow-up und danach eine Call-Aufgabe.</p>
+          <div className={styles.kicker}>Walkenhorst · Loom Outreach</div>
+          <h1>30 Leads. 30 persönliche Videos. Ein Klick.</h1>
+          <p>Ein Golden Master von Andreas wird automatisch pro Unternehmen personalisiert: echte Website im Hintergrund, Talking Head, Scroll-Bewegung, eigene Video-Seite und anschließend die persönliche Outreach-Mail.</p>
         </div>
         <button className={styles.launchButton} disabled={!canLaunch} onClick={() => void launchPilot()}>
-          {busy ? "Wird gestartet …" : "30er-Pilot starten"}
+          {busy ? "Looms werden vorbereitet …" : "30er Loom-Pilot starten"}
         </button>
       </section>
 
+      {progress ? <div className={styles.success}>{progress}</div> : null}
       {error ? <div className={styles.error}>{error}</div> : null}
       {message ? <div className={styles.success}>{message}</div> : null}
 
@@ -227,7 +283,7 @@ export function LaunchCampaign({ user: _user }: { user: User }) {
         </article>
         <article className={styles.readyCard}>
           <span>3</span>
-          <div><strong>Sequenz</strong><small>E-Mail → Follow-up → Call</small></div>
+          <div><strong>Loom Engine</strong><small>Website + Talking Head + Scroll + eigene /v-Seite</small></div>
         </article>
       </section>
 
@@ -237,19 +293,22 @@ export function LaunchCampaign({ user: _user }: { user: User }) {
             <div><span className={styles.eyebrow}>Live</span><h2>Aktive Kampagnen</h2></div>
             <strong>{activeCampaigns.length}</strong>
           </div>
-          {activeCampaigns.length ? activeCampaigns.map((campaign) => (
-            <div className={styles.campaign} key={campaign.id}>
-              <div className={styles.campaignTop}>
-                <div><strong>{campaign.name}</strong><small>{statusLabel(campaign.status)}</small></div>
-                <button disabled={busy} onClick={() => void runNow(campaign.id)}>Jetzt prüfen</button>
+          {activeCampaigns.length ? activeCampaigns.map((campaign) => {
+            const vr = campaign.videoReadiness || {};
+            return (
+              <div className={styles.campaign} key={campaign.id}>
+                <div className={styles.campaignTop}>
+                  <div><strong>{campaign.name}</strong><small>{statusLabel(campaign.status)} · {Number(vr.ready || 0)}/{Number(vr.required || 0)} Looms bereit</small></div>
+                  <button disabled={busy} onClick={() => void runNow(campaign.id)}>Jetzt prüfen</button>
+                </div>
+                <div className={styles.metrics}>
+                  <div><strong>{campaign.metrics.sent}</strong><span>gesendet</span></div>
+                  <div><strong>{campaign.metrics.opened}</strong><span>{pct(campaign.metrics.opened, campaign.metrics.sent)} geöffnet</span></div>
+                  <div><strong>{campaign.metrics.replied}</strong><span>{pct(campaign.metrics.replied, campaign.metrics.sent)} Antworten</span></div>
+                </div>
               </div>
-              <div className={styles.metrics}>
-                <div><strong>{campaign.metrics.sent}</strong><span>gesendet</span></div>
-                <div><strong>{campaign.metrics.opened}</strong><span>{pct(campaign.metrics.opened, campaign.metrics.sent)} geöffnet</span></div>
-                <div><strong>{campaign.metrics.replied}</strong><span>{pct(campaign.metrics.replied, campaign.metrics.sent)} Antworten</span></div>
-              </div>
-            </div>
-          )) : <p className={styles.empty}>Noch keine aktive Kampagne. Sobald Mailbox und Leads bereit sind, startest du oben den 30er-Pilot.</p>}
+            );
+          }) : <p className={styles.empty}>Noch keine aktive Kampagne. Oben startest du den Loom-Pilot; versendet wird erst, wenn alle ausgewählten Videos vorbereitet sind.</p>}
         </article>
 
         <article className={styles.panel}>
@@ -264,7 +323,7 @@ export function LaunchCampaign({ user: _user }: { user: User }) {
       </section>
 
       <section className={styles.rule}>
-        <strong>Launch-Regel:</strong> Erst wenn der 30er-Pilot sauber sendet und Antworten erzeugt, erhöhen wir Volumen oder schalten personalisierte Videos wieder dazu.
+        <strong>Launch-Regel:</strong> Video bleibt der Kern. Wir vereinfachen nicht das Angebot, sondern nur die Produktion: ein Golden Master, automatische Personalisierung, keine manuelle Bearbeitung pro Lead und kein MP4-Zwang.
       </section>
     </main>
   );
