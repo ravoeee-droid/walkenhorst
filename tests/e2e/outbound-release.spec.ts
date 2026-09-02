@@ -82,7 +82,7 @@ const workflowReady = {
   recommended_action: "Versand freigeben",
   workflow_percent: 78,
   video_page_slug: "qa-walkenhorst",
-  rendered_video_url: "https://cdn.example.test/final.mp4",
+  rendered_video_url: null,
 };
 
 const publicVideoPage = {
@@ -102,10 +102,19 @@ const publicVideoPage = {
   studio_config: {},
   accent_color: "#d9a928",
   template_key: "energiekosten",
-  timeline_v3: null,
+  timeline_v3: {
+    version: 3,
+    durationMs: 107000,
+    fps: 30,
+    aspectRatio: "16:9",
+    width: 1920,
+    height: 1080,
+    backgroundColor: "#07192a",
+    tracks: [{ id: "track-bg", name: "Website", type: "background", zIndex: 10, locked: false, hidden: false, items: [] }],
+  },
   landing_config: null,
   brand_kit_snapshot: null,
-  rendered_video_url: "https://cdn.example.test/final.mp4",
+  rendered_video_url: null,
   rendered_video_format: "mp4",
 };
 
@@ -227,47 +236,47 @@ test("lead opens from commercial CRM", async ({ page }) => {
   await expect(page.getByText("QA Solarwerke GmbH", { exact: true }).first()).toBeVisible();
 });
 
-test("bulk checkbox, enrichment and landingpage actions work", async ({ page }) => {
+test("bulk actions use canonical contact and Loom workflow", async ({ page }) => {
   const actions = await mockSupabase(page);
   await openProtected(page, "/crm/commercial");
   const boxes = page.getByRole("checkbox");
   await boxes.nth(1).check();
   await expect(page.getByText("1 ausgewählt", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Enrichment", exact: true }).click();
+  await page.getByRole("button", { name: "Kontakte anreichern", exact: true }).click();
   await expect.poll(() => actions.some((x) => x.endpoint === "crm-lead-workflow" && x.body.action === "enrich")).toBeTruthy();
-  await page.waitForTimeout(1900);
-  await boxes.nth(1).check();
-  await page.getByRole("button", { name: "LP erstellen", exact: true }).click();
-  await expect.poll(() => actions.some((x) => x.endpoint === "crm-lead-workflow" && x.body.action === "prepare_page")).toBeTruthy();
+  await page.waitForTimeout(2000);
+  await page.getByRole("button", { name: "Looms erstellen", exact: true }).click();
+  await expect.poll(() => actions.some((x) => x.endpoint === "crm-lead-workflow" && x.body.action === "prepare_page" && x.body.templateKey === "energiekosten")).toBeTruthy();
+  await expect(page).toHaveURL(/\/crm\/commercial$/);
 });
 
-test("render bulk queues a job without navigating to Studio", async ({ page }) => {
+test("bulk draft creation stays in the canonical CRM workflow", async ({ page }) => {
   const actions = await mockSupabase(page);
   await openProtected(page, "/crm/commercial");
   await page.getByRole("checkbox").nth(1).check();
-  await page.getByRole("button", { name: "Videos rendern", exact: true }).click();
-  await expect.poll(() => actions.some((x) => x.endpoint === "crm-render-queue" && x.body.action === "bulk_queue" && x.body.leadIds?.includes(LEAD_ID))).toBeTruthy();
+  await page.getByRole("button", { name: "Entwürfe erstellen", exact: true }).click();
+  await expect.poll(() => actions.some((x) => x.endpoint === "crm-lead-workflow" && x.body.action === "create_draft")).toBeTruthy();
   await expect(page).toHaveURL(/\/crm\/commercial$/);
-  await expect(page.getByText(/1 Videos eingeplant/)).toBeVisible();
 });
 
-test("public landing page uses completed rendered MP4", async ({ page }) => {
+test("public Loom page uses Live Timeline V3 without requiring MP4", async ({ page }) => {
   await mockSupabase(page);
   await page.goto("/v/qa-walkenhorst");
   await expect(page.getByText("QA Solarwerke GmbH", { exact: true }).first()).toBeVisible();
-  const video = page.locator("video").first();
-  await expect(video).toHaveAttribute("src", "https://cdn.example.test/final.mp4");
+  await expect(page.locator("[data-studio-v3-public-player]")).toBeVisible();
+  await expect(page.locator('video[src="https://cdn.example.test/final.mp4"]')).toHaveCount(0);
 });
 
-test("mail send stays blocked until rendered video exists", async ({ page }) => {
-  const blockedWorkflow = { ...workflowReady, video_ready: false, rendered_video_url: null, workflow_stage: 5, workflow_stage_label: "Prüfung", workflow_percent: 66 };
+test("mail send stays blocked until a personal Loom exists", async ({ page }) => {
+  const blockedWorkflow = { ...workflowReady, video_ready: false, rendered_video_url: null, workflow_stage: 2, workflow_stage_label: "Loom", workflow_percent: 38 };
   await mockSupabase(page, {
     workflow: blockedWorkflow,
-    page: { id: PAGE_ID, slug: "qa-walkenhorst", status: "published", is_public: true, rendered_video_url: null, rendered_at: null, template_key: "energiekosten", duration_seconds: 107, updated_at: "2026-08-27T10:10:00.000Z" },
-    gates: { checks: [{ key: "video", label: "Video fertig gerendert", ok: false }], allPassed: false, sendPassed: false },
+    page: { id: PAGE_ID, slug: "qa-walkenhorst", status: "published", is_public: true, rendered_video_url: null, rendered_at: null, template_key: "energiekosten", timeline_v3: null, duration_seconds: 107, updated_at: "2026-08-27T10:10:00.000Z" },
+    gates: { checks: [{ key: "video", label: "Persönlicher Loom bereit", ok: false }], allPassed: false, sendPassed: false },
   });
   await openProtected(page, `/leads/${LEAD_ID}`);
   const send = page.getByRole("button", { name: "E-Mail senden", exact: true });
   await expect(send).toBeVisible();
   await expect(send).toBeDisabled();
 });
+
