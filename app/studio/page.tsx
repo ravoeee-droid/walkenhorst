@@ -1,7 +1,5 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import { AuthGate } from "@/components/auth-gate";
-import { StudioUploadProgress } from "@/components/studio-upload-progress";
-import { StudioV3Editor } from "@/components/studio-v3/studio-v3-editor";
-
-export default function StudioPage(){return <><AuthGate>{user=><StudioV3Editor user={user}/>}</AuthGate><StudioUploadProgress/></>}
+export default function StudioPage(){
+  redirect("/studio/b2b");
+}

@@ -45,6 +45,7 @@ export const WALKENHORST_BRAND_DEFAULT:StudioV3BrandKit={
 
 export const STUDIO_V3_PRESETS=[
  {key:"pv-gewerbe",label:"PV Gewerbe",headline:"{{company}}: ungenutztes Energiepotenzial sichtbar machen",problem:"Eigenverbrauch, Dachfläche und Stromkosten"},
+ {key:"pv-privat",label:"PV Privat",headline:"{{firstname}}, was Ihr Zuhause energetisch leisten könnte",problem:"Eigenverbrauch, Dachfläche, Stromkosten und Unabhängigkeit"},
  {key:"energiekosten",label:"Energiekosten",headline:"3 Hebel, mit denen {{company}} Energiekosten systematisch prüfen kann",problem:"Strom- und Erdgasverträge, Verbrauch und Beschaffung"},
  {key:"dachflaeche",label:"Dach & PV",headline:"Was die Fläche von {{company}} energetisch leisten könnte",problem:"Dachfläche, PV-Leistung und Eigenverbrauch"},
  {key:"energieaudit",label:"Energieaudit",headline:"Kurze Effizienz-Analyse für {{company}}",problem:"Energieaudit, Effizienz und Förderfähigkeit"},

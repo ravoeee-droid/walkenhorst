@@ -13,7 +13,7 @@ import { StudioLivePageBridge } from "@/components/studio-live-page-bridge";
 import { RenderQueueRunner } from "@/components/crm/render-queue-runner";
 import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
 
-type IconName = "bolt" | "search" | "send" | "inbox" | "phone" | "pipeline" | "database" | "settings";
+type IconName = "bolt" | "search" | "send" | "inbox" | "phone" | "pipeline" | "database" | "settings" | "users" | "video";
 type NavItem = { label: string; href: string; icon: IconName; section?: string };
 type NavGroup = { label: string; items: NavItem[] };
 
@@ -26,6 +26,8 @@ const ICONS: Record<IconName, string> = {
   pipeline: "M4 5h6v5H4V5Zm10 0h6v5h-6V5ZM9 15h6v5H9v-5Zm-2-5v3h10v-3M12 13v2",
   database: "M4 6c0-2 4-3 8-3s8 1 8 3-4 3-8 3-8-1-8-3Zm0 0v6c0 2 4 3 8 3s8-1 8-3V6m-16 6v6c0 2 4 3 8 3s8-1 8-3v-6",
   settings: "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm0-5 1 3 3 1 3-1 2 3-2 2v3l2 2-2 3-3-1-3 1-3-1-3 1-2-3 2-2v-3L3 9l2-3 3 1 3-1 1-3Z",
+  users: "M8 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm8 1a3 3 0 1 0 0-6m-8 7c-4 0-6 2-6 5v2h12v-2c0-3-2-5-6-5Zm8 1c3 0 5 2 5 5v1h-5",
+  video: "M3 5h13v14H3V5Zm13 5 5-3v10l-5-3v-4Z",
 };
 
 function NavIcon({ name }: { name: IconName }) {
@@ -36,24 +38,36 @@ function NavIcon({ name }: { name: IconName }) {
   );
 }
 
-// LAUNCH MODE: only the pages needed to create conversations and close deals.
-// The advanced modules remain available via direct URLs, but are intentionally
-// removed from the daily navigation so the team can focus on outbound execution.
+// TWO-WORKSPACE MODE: B2B and B2C remain visibly and technically separate.
 const NAV_GROUPS: NavGroup[] = [
   {
-    label: "Outbound",
+    label: "B2B · Gewerbe",
+    items: [
+      { label: "B2B CRM", href: "/crm/commercial", icon: "users" },
+      { label: "B2B Studio", href: "/studio/b2b", icon: "video" },
+      { label: "B2B Outreach", href: "/campaign-lab", icon: "send" },
+    ],
+  },
+  {
+    label: "B2C · Privat",
+    items: [
+      { label: "B2C CRM", href: "/crm/private", icon: "users" },
+      { label: "B2C Studio", href: "/studio/b2c", icon: "video" },
+    ],
+  },
+  {
+    label: "Sales",
     items: [
       { label: "Heute", href: "/command", icon: "bolt" },
-      { label: "Leads", href: "/dashboard?section=finder", section: "finder", icon: "search" },
-      { label: "Kampagne", href: "/campaign-lab", icon: "send" },
       { label: "Antworten", href: "/dashboard?section=inbox", section: "inbox", icon: "inbox" },
       { label: "Calls", href: "/calls", icon: "phone" },
       { label: "Pipeline", href: "/pipeline", icon: "pipeline" },
     ],
   },
   {
-    label: "Setup",
+    label: "System",
     items: [
+      { label: "Lead Finder", href: "/dashboard?section=finder", section: "finder", icon: "search" },
       { label: "Daten", href: "/data", icon: "database" },
       { label: "Einstellungen", href: "/settings", icon: "settings" },
     ],
@@ -154,7 +168,7 @@ function DashboardFrame({ user, children }: { user: User; children: ReactNode })
               <span className="wh-brand-mark">W</span>
               <span className="wh-brand-copy">
                 <strong>Walkenhorst</strong>
-                <small>Outbound Launch</small>
+                <small>B2B + B2C Sales OS</small>
               </span>
             </Link>
           </div>
@@ -180,7 +194,7 @@ function DashboardFrame({ user, children }: { user: User; children: ReactNode })
           </nav>
 
           <div className="wh-sidebar-footer">
-            <div className="wh-system-pill"><span />Launch Mode</div>
+            <div className="wh-system-pill"><span />2 getrennte Workspaces</div>
             <div className="wh-user-card">
               <div className="wh-user-avatar">{initials(user)}</div>
               <div className="wh-user-copy">
@@ -198,7 +212,7 @@ function DashboardFrame({ user, children }: { user: User; children: ReactNode })
           <header className="wh-mobile-bar">
             <button type="button" onClick={() => setMobileOpen(true)} aria-label="Navigation öffnen"><span /><span /><span /></button>
             <Link href="/command"><span className="wh-mobile-mark">W</span><strong>Walkenhorst</strong></Link>
-            <Link className="wh-mobile-studio" href="/campaign-lab" prefetch>Kampagne</Link>
+            <Link className="wh-mobile-studio" href="/crm/commercial" prefetch>B2B CRM</Link>
           </header>
           <div className="wh-app-content">{children}</div>
         </section>
