@@ -11,7 +11,7 @@ import "./lead-production-state.css";
 
 export const metadata: Metadata = {
   title: "Walkenhorst Energy Sales OS",
-  description: "Revenue Intelligence, Outbound, Studio V3 und Sales CRM für Walkenhorst in einem System.",
+  description: "B2B- und B2C-Sales-OS mit CRM, personalisierten Live-Looms, Outreach und Engagement in einem klaren Prozess.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
