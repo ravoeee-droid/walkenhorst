@@ -1,0 +1,38 @@
+name: Harden Public Timeline
+
+on:
+  push:
+    branches: ["feature/walkenhorst-final-hold"]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feature/walkenhorst-final-hold
+          fetch-depth: 0
+      - name: Require a persisted Timeline V3
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('components/video-landing.tsx')
+          s = p.read_text()
+          old = 'function timelineFromPage(page:VideoPage):StudioV3Timeline|null{const raw=page.timeline_v3 as Partial<StudioV3Timeline>|null;if(raw?.version===3&&Array.isArray(raw.tracks))return raw as StudioV3Timeline;const project=normalizeStudioV3Project(page.studio_config,page.template_key||"pv-gewerbe");return project.version===3?project.timeline:null}'
+          new = 'function timelineFromPage(page:VideoPage):StudioV3Timeline|null{const raw=page.timeline_v3 as Partial<StudioV3Timeline>|null;if(raw?.version===3&&Array.isArray(raw.tracks))return raw as StudioV3Timeline;const stored=page.studio_config as {version?:number;timeline?:Partial<StudioV3Timeline>}|null;if(stored?.version!==3||stored.timeline?.version!==3||!Array.isArray(stored.timeline.tracks))return null;return normalizeStudioV3Project(stored,page.template_key||"pv-gewerbe").timeline}'
+          if old not in s:
+              raise SystemExit('timelineFromPage signature not found exactly once')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          Path('.github/workflows/harden-public-timeline.yml').unlink()
+          PY
+      - name: Commit hardened public Loom
+        run: |
+          git config user.name "walkenhorst-automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: require persisted Timeline V3 for live Loom playback"
+          git push origin HEAD:feature/walkenhorst-final-hold
