@@ -20,14 +20,19 @@ permissions:
 
 jobs:
   render:
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        slot: [1, 2, 3, 4, 5, 6, 7, 8]
     runs-on: ubuntu-latest
     timeout-minutes: 55
     env:
       WALKENHORST_APP_URL: https://walkenhorst.vercel.app
       RENDER_TICKET_URL: https://jiahshldcusphxtbqxpv.supabase.co/functions/v1/github-render-ticket
-      MAX_JOBS_PER_RUN: "4"
+      MAX_JOBS_PER_RUN: "6"
       RENDER_JOB_TIMEOUT_MS: "900000"
-      WORKER_SLOT: "1"
+      WORKER_SLOT: ${{ matrix.slot }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
