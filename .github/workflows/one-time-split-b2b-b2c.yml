@@ -1,0 +1,151 @@
+name: One-time B2B/B2C workspace split
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-time-split-b2b-b2c.yml
+
+permissions:
+  contents: write
+
+jobs:
+  split:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Split CRM and Studio workspaces
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f"Pattern not found in {path}: {old[:120]}")
+              p.write_text(text.replace(old, new, 1))
+
+          def replace_all(path, old, new, minimum=1):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count < minimum:
+                  raise SystemExit(f"Expected >= {minimum} matches in {path}, got {count}: {old[:120]}")
+              p.write_text(text.replace(old, new))
+
+          # Studio editor: hard-filter leads and lock each route to its own master.
+          path = "components/studio-v3/studio-v3-editor.tsx"
+          replace_once(path,
+              'type Mode="video"|"landing"|"brand"|"versions"|"render";\n',
+              'type Mode="video"|"landing"|"brand"|"versions"|"render";\ntype CustomerType="commercial"|"private";\ntype StudioV3EditorProps={user:User;customerType:CustomerType;defaultTemplateKey:string;studioLabel:string;templateLabel:string};\n')
+          replace_once(path,
+              'type VideoPage={id:string;lead_id:string;slug:string;rendered_video_url:string|null};',
+              'type VideoPage={id:string;lead_id:string;slug:string;rendered_video_url:string|null;template_key:string};')
+          replace_once(path,
+              'export function StudioV3Editor({user}:{user:User}){',
+              'export function StudioV3Editor({user,customerType,defaultTemplateKey,studioLabel,templateLabel}:StudioV3EditorProps){')
+          replace_once(path,
+              'const[templateKey,setTemplateKey]=useState("pv-gewerbe");',
+              'const[templateKey,setTemplateKey]=useState(defaultTemplateKey);')
+          replace_once(path,
+              'const currentPage=selectedLead?pages.find(page=>page.lead_id===selectedLead.id)||null:null;',
+              'const currentPage=selectedLead?pages.find(page=>page.lead_id===selectedLead.id&&page.template_key===templateKey)||null:null;')
+          replace_once(path,
+              'supabase.from("energy_leads").select("id,company_name,contact_name,website,city,industry,address,postcode,country,roof_area_m2,pv_score,energy_score,total_score,summary,next_action,research_context").eq("user_id",user.id).order("total_score",{ascending:false}).limit(2500)',
+              'supabase.from("energy_leads").select("id,company_name,contact_name,website,city,industry,address,postcode,country,roof_area_m2,pv_score,energy_score,total_score,summary,next_action,research_context").eq("user_id",user.id).eq("customer_type",customerType).order("total_score",{ascending:false}).limit(2500)')
+          replace_once(path,
+              'supabase.from("energy_video_pages").select("id,lead_id,slug,rendered_video_url").eq("user_id",user.id)',
+              'supabase.from("energy_video_pages").select("id,lead_id,slug,rendered_video_url,template_key").eq("user_id",user.id)')
+          replace_once(path,
+              'const global=nextConfigs.find(row=>row.scope==="global"&&row.template_key==="pv-gewerbe"&&!row.lead_id);setProjectState(configToProject(global?.config,"pv-gewerbe"));',
+              'const global=nextConfigs.find(row=>row.scope==="global"&&row.template_key===defaultTemplateKey&&!row.lead_id);setTemplateKey(defaultTemplateKey);setProjectState(configToProject(global?.config,defaultTemplateKey));')
+          replace_once(path,
+              '},[supabase,user.id]);useEffect(()=>{void load()},[load]);',
+              '},[supabase,user.id,customerType,defaultTemplateKey]);useEffect(()=>{void load()},[load]);')
+          replace_all(path,
+              '.select("id,lead_id,slug,rendered_video_url").single()',
+              '.select("id,lead_id,slug,rendered_video_url,template_key").single()',
+              minimum=2)
+          replace_once(path,
+              '<strong>Walkenhorst Studio V3</strong><small>Personalized Video Sales Studio</small>',
+              '<strong>{studioLabel}</strong><small>{customerType==="commercial"?"B2B · Personalized Video Sales":"B2C · Privatkunden Video Sales"}</small>')
+          replace_once(path,
+              '<a className={styles.btn} href="/dashboard">Sales OS</a>',
+              '<a className={styles.btn} href={customerType==="commercial"?"/crm/commercial":"/crm/private"}>CRM</a>')
+          replace_once(path,
+              '<option value="global">MASTER · alle Leads</option>',
+              '<option value="global">{customerType==="commercial"?"B2B MASTER · Gewerbe":"B2C MASTER · Privat"}</option>')
+          replace_once(path,
+              '<select className={styles.btn} value={templateKey} onChange={e=>choosePreset(e.target.value)}>{STUDIO_V3_PRESETS.map(preset=><option value={preset.key} key={preset.key}>{preset.label}</option>)}</select>',
+              '<span className={styles.btn} style={{cursor:"default"}}>{templateLabel}</span>')
+
+          # Keep preset registry explicit, even though each workspace is locked to its own master.
+          path = "lib/studio-v3.ts"
+          replace_once(path,
+              ' {key:"pv-gewerbe",label:"PV Gewerbe",headline:"{{company}}: ungenutztes Energiepotenzial sichtbar machen",problem:"Eigenverbrauch, Dachfläche und Stromkosten"},\n',
+              ' {key:"pv-gewerbe",label:"PV Gewerbe",headline:"{{company}}: ungenutztes Energiepotenzial sichtbar machen",problem:"Eigenverbrauch, Dachfläche und Stromkosten"},\n {key:"pv-privat",label:"PV Privat",headline:"{{firstname}}, was Ihr Zuhause energetisch leisten könnte",problem:"Eigenverbrauch, Dachfläche, Stromkosten und Unabhängigkeit"},\n')
+
+          # CRM: explicit studio master per segment for newly created leads and all bulk production calls.
+          path = "components/crm/lead-crm.tsx"
+          replace_once(path,
+              'const commercial=customerType==="commercial";',
+              'const commercial=customerType==="commercial";const studioTemplateKey=commercial?"energiekosten":"pv-privat";')
+          replace_once(path,
+              'supabase.functions.invoke("crm-render-queue",{body:{action:"bulk_queue",leadIds:ids}})',
+              'supabase.functions.invoke("crm-render-queue",{body:{action:"bulk_queue",leadIds:ids,templateKey:studioTemplateKey}})')
+          replace_once(path,
+              'supabase.functions.invoke("crm-lead-workflow",{body:{action,leadId,baseUrl:window.location.origin}})',
+              'supabase.functions.invoke("crm-lead-workflow",{body:{action,leadId,baseUrl:window.location.origin,templateKey:studioTemplateKey}})')
+          replace_once(path,
+              'user_id:userId,customer_type:customerType,company_name:display,',
+              'user_id:userId,customer_type:customerType,video_template_key:studioTemplateKey,company_name:display,')
+
+          # Dedicated Studio routes.
+          Path("app/studio/b2b").mkdir(parents=True, exist_ok=True)
+          Path("app/studio/b2b/page.tsx").write_text('''"use client";\n\nimport { AuthGate } from "@/components/auth-gate";\nimport { StudioUploadProgress } from "@/components/studio-upload-progress";\nimport { StudioV3Editor } from "@/components/studio-v3/studio-v3-editor";\n\nexport default function B2BStudioPage(){\n  return <>\n    <AuthGate>{user=><StudioV3Editor user={user} customerType="commercial" defaultTemplateKey="energiekosten" studioLabel="Walkenhorst B2B Studio" templateLabel="B2B · Energiekosten Loom"/>}</AuthGate>\n    <StudioUploadProgress/>\n  </>;\n}\n''')
+          Path("app/studio/b2c").mkdir(parents=True, exist_ok=True)
+          Path("app/studio/b2c/page.tsx").write_text('''"use client";\n\nimport { AuthGate } from "@/components/auth-gate";\nimport { StudioUploadProgress } from "@/components/studio-upload-progress";\nimport { StudioV3Editor } from "@/components/studio-v3/studio-v3-editor";\n\nexport default function B2CStudioPage(){\n  return <>\n    <AuthGate>{user=><StudioV3Editor user={user} customerType="private" defaultTemplateKey="pv-privat" studioLabel="Walkenhorst B2C Studio" templateLabel="B2C · PV Privat"/>}</AuthGate>\n    <StudioUploadProgress/>\n  </>;\n}\n''')
+          Path("app/studio/page.tsx").write_text('''import { redirect } from "next/navigation";\n\nexport default function StudioPage(){\n  redirect("/studio/b2b");\n}\n''')
+
+          # Navigation: make the two workspaces first-class again.
+          path = "components/application-frame.tsx"
+          replace_once(path,
+              'type IconName = "bolt" | "search" | "send" | "inbox" | "phone" | "pipeline" | "database" | "settings";',
+              'type IconName = "bolt" | "search" | "send" | "inbox" | "phone" | "pipeline" | "database" | "settings" | "users" | "video";')
+          replace_once(path,
+              '  settings: "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm0-5 1 3 3 1 3-1 2 3-2 2v3l2 2-2 3-3-1-3 1-3-1-3 1-2-3 2-2v-3L3 9l2-3 3 1 3-1 1-3Z",\n',
+              '  settings: "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm0-5 1 3 3 1 3-1 2 3-2 2v3l2 2-2 3-3-1-3 1-3-1-3 1-2-3 2-2v-3L3 9l2-3 3 1 3-1 1-3Z",\n  users: "M8 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm8 1a3 3 0 1 0 0-6m-8 7c-4 0-6 2-6 5v2h12v-2c0-3-2-5-6-5Zm8 1c3 0 5 2 5 5v1h-5",\n  video: "M3 5h13v14H3V5Zm13 5 5-3v10l-5-3v-4Z",\n')
+          p = Path(path)
+          text = p.read_text()
+          start = text.index('// LAUNCH MODE:')
+          end = text.index('const PUBLIC_PREFIXES')
+          nav = '''// TWO-WORKSPACE MODE: B2B and B2C remain visibly and technically separate.\nconst NAV_GROUPS: NavGroup[] = [\n  {\n    label: "B2B · Gewerbe",\n    items: [\n      { label: "B2B CRM", href: "/crm/commercial", icon: "users" },\n      { label: "B2B Studio", href: "/studio/b2b", icon: "video" },\n      { label: "B2B Outreach", href: "/campaign-lab", icon: "send" },\n    ],\n  },\n  {\n    label: "B2C · Privat",\n    items: [\n      { label: "B2C CRM", href: "/crm/private", icon: "users" },\n      { label: "B2C Studio", href: "/studio/b2c", icon: "video" },\n    ],\n  },\n  {\n    label: "Sales",\n    items: [\n      { label: "Heute", href: "/command", icon: "bolt" },\n      { label: "Antworten", href: "/dashboard?section=inbox", section: "inbox", icon: "inbox" },\n      { label: "Calls", href: "/calls", icon: "phone" },\n      { label: "Pipeline", href: "/pipeline", icon: "pipeline" },\n    ],\n  },\n  {\n    label: "System",\n    items: [\n      { label: "Lead Finder", href: "/dashboard?section=finder", section: "finder", icon: "search" },\n      { label: "Daten", href: "/data", icon: "database" },\n      { label: "Einstellungen", href: "/settings", icon: "settings" },\n    ],\n  },\n];\n\n'''
+          p.write_text(text[:start] + nav + text[end:])
+          replace_once(path, '<small>Outbound Launch</small>', '<small>B2B + B2C Sales OS</small>')
+          replace_once(path, '<div className="wh-system-pill"><span />Launch Mode</div>', '<div className="wh-system-pill"><span />2 getrennte Workspaces</div>')
+          replace_once(path, '<Link className="wh-mobile-studio" href="/campaign-lab" prefetch>Kampagne</Link>', '<Link className="wh-mobile-studio" href="/crm/commercial" prefetch>B2B CRM</Link>')
+
+          # Remove this one-time workflow from the resulting source tree.
+          Path('.github/workflows/one-time-split-b2b-b2c.yml').unlink()
+          PY
+
+      - name: Verify typecheck and build
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build
+
+      - name: Commit split
+        run: |
+          git config user.name "walkenhorst-automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: separate B2B and B2C CRM studios"
+          git push origin HEAD:main
