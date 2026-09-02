@@ -10,7 +10,6 @@ import { LeadRowOpenBridge } from "@/components/lead-row-open-bridge";
 import { LoginPersonalizationBridge } from "@/components/login-personalization-bridge";
 import { NavigationProgress } from "@/components/navigation-progress";
 import { StudioLivePageBridge } from "@/components/studio-live-page-bridge";
-import { RenderQueueRunner } from "@/components/crm/render-queue-runner";
 import { createSupabaseBrowserClient } from "@/lib/supabase-browser";
 
 type IconName = "bolt" | "search" | "send" | "inbox" | "phone" | "pipeline" | "database" | "settings" | "users" | "video";
@@ -219,7 +218,6 @@ function DashboardFrame({ user, children }: { user: User; children: ReactNode })
 
         <LeadRowOpenBridge user={user} />
         <StudioLivePageBridge user={user} />
-        <RenderQueueRunner user={user} />
       </div>
     </AppUserProvider>
   );

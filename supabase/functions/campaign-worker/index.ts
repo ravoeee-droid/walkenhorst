@@ -91,10 +91,18 @@ function escapeHtml(v: string) {
   return v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;");
 }
 
-function toHtml(text: string, base: string, token: string) {
-  const linked = escapeHtml(text)
-    .replace(/https?:\/\/[^\s&lt;&gt;]+/g, (url) => `<a href="${base}/api/t/c/${token}?url=${encodeURIComponent(url)}">${url}</a>`)
+function toHtml(text: string, base: string, token: string, video?: { url?: string; thumbnailUrl?: string } | null) {
+  const track = (url: string) => `${base}/api/t/c/${token}?url=${encodeURIComponent(url)}`;
+  let linked = escapeHtml(text)
+    .replace(/https?:\/\/[^\s&lt;&gt;]+/g, (url) => `<a href="${track(url)}" style="color:#0a5bd7;text-decoration:underline">${url}</a>`)
     .replace(/\n/g, "<br>");
+  const videoUrl = String(video?.url || "");
+  if (videoUrl) {
+    const linkedUrl = `<a href="${track(videoUrl)}" style="color:#0a5bd7;text-decoration:underline">${videoUrl}</a>`;
+    const thumb = String(video?.thumbnailUrl || "");
+    const card = `<div style="margin:18px 0 20px;max-width:560px"><a href="${track(videoUrl)}" style="display:block;text-decoration:none;color:#111">${thumb ? `<img src="${thumb}" width="560" alt="Persönliche Videoanalyse ansehen" style="display:block;width:100%;max-width:560px;height:auto;border:1px solid #e5e7eb;border-radius:14px 14px 0 0">` : ""}<span style="display:block;padding:13px 16px;background:#0b2033;color:#fff;border-radius:${thumb ? "0 0 14px 14px" : "14px"};font-family:Arial,sans-serif;font-size:15px;font-weight:700;text-align:center">▶ Persönliche Videoanalyse ansehen</span></a></div>`;
+    linked = linked.replace(linkedUrl, card);
+  }
   return `<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.6;color:#151515">${linked}<br><br><span style="font-size:11px;color:#888">Kein Interesse? <a href="${base}/u/${token}">Abmelden</a></span><img src="${base}/api/t/o/${token}" width="1" height="1" alt="" style="display:none"></div>`;
 }
 
@@ -235,7 +243,7 @@ async function readyVideo(db: DB, lead: any, c: any, base: string) {
 
   const { data: p, error: pe } = await db
     .from("energy_video_pages")
-    .select("id,slug,rendered_video_url,rendered_video_format,rendered_at,studio_revision,status,timeline_v3,website_capture_url,website_capture_status,website_capture_verified_at,website_capture_width,website_capture_height,website_capture_error,presenter_video_url")
+    .select("id,slug,rendered_video_url,rendered_video_format,rendered_at,studio_revision,status,timeline_v3,website_capture_url,thumbnail_url,website_capture_status,website_capture_verified_at,website_capture_width,website_capture_height,website_capture_error,presenter_video_url")
     .eq("user_id", c.user_id)
     .eq("lead_id", lead.id)
     .eq("template_key", templateKey)
@@ -290,6 +298,7 @@ async function readyVideo(db: DB, lead: any, c: any, base: string) {
     deliveryMode: liveReady ? "live_timeline_v3" : "rendered_mp4",
     captureWidth: capture.width,
     captureHeight: capture.height,
+    thumbnailUrl: String(p.thumbnail_url || p.website_capture_url || ""),
   };
 }
 
@@ -440,6 +449,7 @@ async function processMember(db: DB, c: any, member: any, steps: any[], baseOver
           template_key: video?.templateKey || null,
           website_capture_width: video?.captureWidth || null,
           website_capture_height: video?.captureHeight || null,
+          thumbnail_url: video?.thumbnailUrl || null,
           variant_id: variant?.id || null,
           variant_name: variant?.name || null,
         },
@@ -450,7 +460,7 @@ async function processMember(db: DB, c: any, member: any, steps: any[], baseOver
     message = ins.data;
   }
 
-  const html = toHtml(text, base, message.tracking_token);
+  const html = toHtml(text, base, message.tracking_token, video);
   await db
     .from("energy_messages")
     .update({ status: "sending", subject, body_text: text, body_html: html, mailbox_id: mailbox.id, updated_at: new Date().toISOString() })
