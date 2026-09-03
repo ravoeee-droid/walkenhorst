@@ -165,9 +165,9 @@ export function LaunchCampaign({ user: _user }: { user: User }) {
           const contentType = String(response.headers.get("content-type") || "").toLowerCase();
           const width = Number(response.headers.get("x-capture-width") || 0);
           const height = Number(response.headers.get("x-capture-height") || 0);
-          await response.body?.cancel().catch(() => undefined);
-          if (!response.ok || !contentType.startsWith("image/") || width < 1920 || height < 1080) {
-            throw new Error(`Poster ungültig (${response.status}, ${width}x${height})`);
+          const bytes = await response.arrayBuffer();
+          if (!response.ok || !contentType.startsWith("image/") || width < 1920 || height < 1080 || bytes.byteLength < 5000) {
+            throw new Error(`Poster ungültig (${response.status}, ${width}x${height}, ${bytes.byteLength} Bytes)`);
           }
           const { error: updateError } = await supabase
             .from("energy_video_pages")
