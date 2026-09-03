@@ -48,13 +48,21 @@ type AdminLoad = {
   leadCount: number;
 };
 
+type PublishRow = {
+  leadId?: string;
+  slug?: string;
+  url?: string;
+  studioRevision?: number;
+  error?: string;
+};
+
 type PublishResult = {
   ok?: boolean;
   prepared?: number;
   failed?: number;
   liveCaptures?: number;
   staticCaptures?: number;
-  results?: Array<{ leadId?: string; url?: string; error?: string }>;
+  results?: PublishRow[];
   error?: string;
 };
 
@@ -93,6 +101,17 @@ function statusLabel(status: Campaign["status"]) {
   return "Entwurf";
 }
 
+function posterSlug(row: PublishRow) {
+  if (row.slug) return row.slug;
+  if (!row.url) return "";
+  try {
+    const parts = new URL(row.url, window.location.origin).pathname.split("/").filter(Boolean);
+    return parts.at(-1) || "";
+  } catch {
+    return "";
+  }
+}
+
 export function LaunchCampaign({ user: _user }: { user: User }) {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -126,6 +145,49 @@ export function LaunchCampaign({ user: _user }: { user: User }) {
     const result = (data || {}) as PublishResult;
     if (result.error) throw new Error(result.error);
     return result;
+  }, [supabase]);
+
+  const preparePosters = useCallback(async (rows: PublishRow[]) => {
+    if (!supabase) throw new Error("Supabase ist nicht konfiguriert.");
+    const usable = rows.filter((row) => row.leadId && posterSlug(row));
+    if (!usable.length) throw new Error("Keine Video-Poster konnten den vorbereiteten Leads zugeordnet werden.");
+
+    let done = 0;
+    const failures: string[] = [];
+    for (let index = 0; index < usable.length; index += 3) {
+      const batch = usable.slice(index, index + 3);
+      await Promise.all(batch.map(async (row) => {
+        const slug = posterSlug(row);
+        const revision = Number(row.studioRevision || 1);
+        const posterUrl = `${window.location.origin}/api/public/studio-poster/${encodeURIComponent(slug)}?v=${encodeURIComponent(String(revision))}`;
+        try {
+          const response = await fetch(posterUrl, { method: "GET", cache: "reload" });
+          const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+          const width = Number(response.headers.get("x-capture-width") || 0);
+          const height = Number(response.headers.get("x-capture-height") || 0);
+          await response.body?.cancel().catch(() => undefined);
+          if (!response.ok || !contentType.startsWith("image/") || width < 1920 || height < 1080) {
+            throw new Error(`Poster ungültig (${response.status}, ${width}x${height})`);
+          }
+          const { error: updateError } = await supabase
+            .from("energy_video_pages")
+            .update({ thumbnail_url: posterUrl, updated_at: new Date().toISOString() })
+            .eq("lead_id", String(row.leadId))
+            .eq("template_key", "energiekosten")
+            .in("status", ["ready", "sent"]);
+          if (updateError) throw updateError;
+          done += 1;
+          setProgress(`${done}/${usable.length} E-Mail-Poster geprüft und vorgeladen …`);
+        } catch (cause) {
+          failures.push(`${slug}: ${cause instanceof Error ? cause.message : "Poster fehlgeschlagen"}`);
+        }
+      }));
+    }
+
+    if (failures.length || done !== usable.length) {
+      throw new Error(`Poster-Preflight gestoppt: ${done}/${usable.length} bereit${failures.length ? ` · ${failures.slice(0, 3).join(" · ")}` : ""}. Es wurde noch nichts versendet.`);
+    }
+    return done;
   }, [supabase]);
 
   const load = useCallback(async () => {
@@ -217,6 +279,7 @@ export function LaunchCampaign({ user: _user }: { user: User }) {
       if (!campaignId) throw new Error("Kampagne wurde angelegt, aber ohne Kampagnen-ID zurückgegeben.");
 
       const audienceCount = Number(created?.audienceCount || 0);
+      if (!audienceCount) throw new Error("Für den Pilot wurden keine versandfähigen Gewerbe-Leads ausgewählt.");
       setProgress(`${audienceCount} persönliche Loom-Videos werden aus dem Golden Master gebaut …`);
       const published = await publishCampaign(campaignId);
       const prepared = Number(published.prepared || 0);
@@ -227,9 +290,13 @@ export function LaunchCampaign({ user: _user }: { user: User }) {
         throw new Error(`Video-Preflight gestoppt: ${prepared}/${audienceCount} Looms bereit${examples.length ? ` · ${examples.join(" · ")}` : ""}. Es wurde noch nichts versendet.`);
       }
 
-      setProgress(`${prepared}/${audienceCount} Looms bereit. Versand wird freigegeben …`);
+      setProgress(`${prepared}/${audienceCount} Looms bereit. First Frames werden geprüft …`);
+      const posters = await preparePosters(published.results || []);
+      if (posters !== audienceCount) throw new Error(`Poster-Preflight unvollständig: ${posters}/${audienceCount}. Es wurde noch nichts versendet.`);
+
+      setProgress(`${prepared}/${audienceCount} Looms und ${posters}/${audienceCount} E-Mail-Poster bereit. Versand wird freigegeben …`);
       await callAdmin({ action: "start", id: campaignId });
-      setMessage(`Loom-Pilot gestartet: ${prepared} personalisierte Videos bereit · Website + Andreas Talking Head · max. 30 Video-Mails pro Tag.`);
+      setMessage(`Loom-Pilot gestartet: ${prepared} personalisierte Videos + ${posters} geprüfte First-Frame-Poster · max. 30 Video-Mails pro Tag.`);
       setProgress(null);
       await load();
     } catch (cause) {
@@ -261,10 +328,10 @@ export function LaunchCampaign({ user: _user }: { user: User }) {
         <div>
           <div className={styles.kicker}>Walkenhorst · Loom Outreach</div>
           <h1>30 Leads. 30 persönliche Videos. Ein Klick.</h1>
-          <p>Ein Golden Master von Andreas wird automatisch pro Unternehmen personalisiert: echte Website im Hintergrund, Talking Head, Scroll-Bewegung, eigene Video-Seite und anschließend die persönliche Outreach-Mail.</p>
+          <p>Ein Golden Master von Andreas wird automatisch pro Unternehmen personalisiert: echte Website im Hintergrund, Talking Head, Scroll-Bewegung, eigener First-Frame-Poster, eigene Video-Seite und anschließend die persönliche Outreach-Mail.</p>
         </div>
         <button className={styles.launchButton} disabled={!canLaunch} onClick={() => void launchPilot()}>
-          {busy ? "Looms werden vorbereitet …" : "30er Loom-Pilot starten"}
+          {busy ? "Launch wird geprüft …" : "30er Loom-Pilot starten"}
         </button>
       </section>
 
@@ -283,7 +350,7 @@ export function LaunchCampaign({ user: _user }: { user: User }) {
         </article>
         <article className={styles.readyCard}>
           <span>3</span>
-          <div><strong>Loom Engine</strong><small>Website + Talking Head + Scroll + eigene /v-Seite</small></div>
+          <div><strong>Loom Engine</strong><small>Website + Talking Head + First Frame + Scroll + eigene /v-Seite</small></div>
         </article>
       </section>
 
@@ -308,7 +375,7 @@ export function LaunchCampaign({ user: _user }: { user: User }) {
                 </div>
               </div>
             );
-          }) : <p className={styles.empty}>Noch keine aktive Kampagne. Oben startest du den Loom-Pilot; versendet wird erst, wenn alle ausgewählten Videos vorbereitet sind.</p>}
+          }) : <p className={styles.empty}>Noch keine aktive Kampagne. Oben startest du den Loom-Pilot; versendet wird erst, wenn alle ausgewählten Videos und First-Frame-Poster geprüft sind.</p>}
         </article>
 
         <article className={styles.panel}>
@@ -323,7 +390,7 @@ export function LaunchCampaign({ user: _user }: { user: User }) {
       </section>
 
       <section className={styles.rule}>
-        <strong>Launch-Regel:</strong> Video bleibt der Kern. Wir vereinfachen nicht das Angebot, sondern nur die Produktion: ein Golden Master, automatische Personalisierung, keine manuelle Bearbeitung pro Lead und kein MP4-Zwang.
+        <strong>Launch-Regel:</strong> Ein Klick darf nur live gehen, wenn alle 30 Leads Video, echte Website, Andreas-Talking-Head und gecachten First-Frame-Poster vollständig haben. Sonst stoppt der Launch vor dem Versand.
       </section>
     </main>
   );
