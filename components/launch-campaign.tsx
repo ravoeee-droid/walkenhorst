@@ -58,8 +58,8 @@ type PublishResult = {
   error?: string;
 };
 
-const SUBJECT = "{{firstname}}, ich habe Ihnen zu {{company}} kurz etwas aufgenommen";
-const BODY = `Guten Tag {{firstname}},
+const SUBJECT = "Kurze Energieanalyse zu {{company}}";
+const BODY = `Guten Tag,
 
 ich habe mir {{company}} in {{city}} angesehen und Ihnen dazu ein kurzes persönliches Video aufgenommen.
 
@@ -72,7 +72,7 @@ Viele Grüße
 Andreas Walkenhorst
 Walkenhorst Energie`;
 
-const FOLLOWUP_BODY = `Guten Tag {{firstname}},
+const FOLLOWUP_BODY = `Guten Tag,
 
 ich wollte mein kurzes Video zu {{company}} noch einmal nach oben holen:
 {{video_url}}
