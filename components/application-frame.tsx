@@ -37,35 +37,29 @@ function NavIcon({ name }: { name: IconName }) {
   );
 }
 
-// TWO-WORKSPACE MODE: B2B and B2C remain visibly and technically separate.
 const NAV_GROUPS: NavGroup[] = [
   {
     label: "B2B · Gewerbe",
     items: [
-      { label: "B2B CRM", href: "/crm/commercial", icon: "users" },
-      { label: "B2B Studio", href: "/studio/b2b", icon: "video" },
-      { label: "B2B Outreach", href: "/campaign-lab", icon: "send" },
+      { label: "Heute", href: "/command", icon: "bolt" },
+      { label: "CRM", href: "/crm/commercial", icon: "users" },
+      { label: "Outreach", href: "/campaign-lab", icon: "send" },
+      { label: "Studio", href: "/studio/b2b", icon: "video" },
+      { label: "Antworten", href: "/dashboard?section=inbox", section: "inbox", icon: "inbox" },
+      { label: "Calls", href: "/calls", icon: "phone" },
     ],
   },
   {
     label: "B2C · Privat",
     items: [
-      { label: "B2C CRM", href: "/crm/private", icon: "users" },
-      { label: "B2C Studio", href: "/studio/b2c", icon: "video" },
+      { label: "CRM", href: "/crm/private", icon: "users" },
+      { label: "Studio", href: "/studio/b2c", icon: "video" },
     ],
   },
   {
-    label: "Sales",
+    label: "Mehr",
     items: [
-      { label: "Heute", href: "/command", icon: "bolt" },
-      { label: "Antworten", href: "/dashboard?section=inbox", section: "inbox", icon: "inbox" },
-      { label: "Calls", href: "/calls", icon: "phone" },
       { label: "Pipeline", href: "/pipeline", icon: "pipeline" },
-    ],
-  },
-  {
-    label: "System",
-    items: [
       { label: "Lead Finder", href: "/dashboard?section=finder", section: "finder", icon: "search" },
       { label: "Daten", href: "/data", icon: "database" },
       { label: "Einstellungen", href: "/settings", icon: "settings" },
@@ -163,11 +157,11 @@ function DashboardFrame({ user, children }: { user: User; children: ReactNode })
 
         <aside className={`wh-app-sidebar ${mobileOpen ? "is-mobile-open" : ""}`}>
           <div className="wh-sidebar-brand">
-            <Link className="wh-brand-lockup" href="/command" aria-label="Walkenhorst Outbound">
+            <Link className="wh-brand-lockup" href="/command" aria-label="Walkenhorst Sales OS">
               <span className="wh-brand-mark">W</span>
               <span className="wh-brand-copy">
                 <strong>Walkenhorst</strong>
-                <small>B2B + B2C Sales OS</small>
+                <small>Sales OS</small>
               </span>
             </Link>
           </div>
@@ -193,7 +187,7 @@ function DashboardFrame({ user, children }: { user: User; children: ReactNode })
           </nav>
 
           <div className="wh-sidebar-footer">
-            <div className="wh-system-pill"><span />2 getrennte Workspaces</div>
+            <div className="wh-system-pill"><span />System aktiv</div>
             <div className="wh-user-card">
               <div className="wh-user-avatar">{initials(user)}</div>
               <div className="wh-user-copy">
@@ -211,7 +205,7 @@ function DashboardFrame({ user, children }: { user: User; children: ReactNode })
           <header className="wh-mobile-bar">
             <button type="button" onClick={() => setMobileOpen(true)} aria-label="Navigation öffnen"><span /><span /><span /></button>
             <Link href="/command"><span className="wh-mobile-mark">W</span><strong>Walkenhorst</strong></Link>
-            <Link className="wh-mobile-studio" href="/crm/commercial" prefetch>B2B CRM</Link>
+            <Link className="wh-mobile-studio" href="/crm/commercial" prefetch>CRM</Link>
           </header>
           <div className="wh-app-content">{children}</div>
         </section>
