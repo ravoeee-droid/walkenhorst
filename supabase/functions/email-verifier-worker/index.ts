@@ -137,6 +137,7 @@ async function candidates(db: DB, limit: number) {
       .select("id,user_id,email,email_status,email_verification_status")
       .in("id", ids)
       .neq("email_status", "invalid")
+      .in("email_verification_status", ["unchecked", "unknown"])
       .limit(limit);
     rows.push(...(q.data || []));
   }
