@@ -43,6 +43,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Heute", href: "/command", icon: "bolt" },
       { label: "CRM", href: "/crm/commercial", icon: "users" },
+      { label: "Pipeline", href: "/pipeline/b2b", icon: "pipeline" },
       { label: "Outreach", href: "/campaign-lab", icon: "send" },
       { label: "Studio", href: "/studio/b2b", icon: "video" },
       { label: "Antworten", href: "/dashboard?section=inbox", section: "inbox", icon: "inbox" },
@@ -53,13 +54,13 @@ const NAV_GROUPS: NavGroup[] = [
     label: "B2C · Privat",
     items: [
       { label: "CRM", href: "/crm/private", icon: "users" },
+      { label: "Pipeline", href: "/pipeline/b2c", icon: "pipeline" },
       { label: "Studio", href: "/studio/b2c", icon: "video" },
     ],
   },
   {
     label: "Mehr",
     items: [
-      { label: "Pipeline", href: "/pipeline", icon: "pipeline" },
       { label: "Lead Finder", href: "/dashboard?section=finder", section: "finder", icon: "search" },
       { label: "Daten", href: "/data", icon: "database" },
       { label: "Einstellungen", href: "/settings", icon: "settings" },

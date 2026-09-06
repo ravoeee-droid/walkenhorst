@@ -1,8 +1,5 @@
-"use client";
-
-import { AuthGate } from "@/components/auth-gate";
-import { CrmPipeline } from "@/components/crm-pipeline";
+import { redirect } from "next/navigation";
 
 export default function PipelinePage(){
-  return <AuthGate>{user=><CrmPipeline user={user}/>}</AuthGate>;
+  redirect("/pipeline/b2b");
 }
