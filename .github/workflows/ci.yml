@@ -121,6 +121,24 @@ jobs:
             playwright-report
             test-results
             .webmotion/shots
-      - name: Fail workflow if verification failed
-        if: steps.install.outcome != 'success' || steps.audit.outcome != 'success' || steps.typecheck.outcome != 'success' || steps.nextbuild.outcome != 'success' || steps.browsers.outcome != 'success' || steps.playwright.outcome != 'success' || steps.energyassets.outcome != 'success' || steps.webmotionlint.outcome != 'success' || steps.webmotionshoot.outcome != 'success'
-        run: exit 1
+      - name: Verify all release gates
+        if: always()
+        env:
+          INSTALL: "${{ steps.install.outcome }}"
+          AUDIT: "${{ steps.audit.outcome }}"
+          TYPECHECK: "${{ steps.typecheck.outcome }}"
+          BUILD: "${{ steps.nextbuild.outcome }}"
+          BROWSERS: "${{ steps.browsers.outcome }}"
+          PLAYWRIGHT: "${{ steps.playwright.outcome }}"
+          ASSETS: "${{ steps.energyassets.outcome }}"
+          WEBMOTION_LINT: "${{ steps.webmotionlint.outcome }}"
+          WEBMOTION_SHOOT: "${{ steps.webmotionshoot.outcome }}"
+        run: |
+          printf 'install=%s audit=%s typecheck=%s build=%s browsers=%s playwright=%s assets=%s lint=%s shoot=%s\n' \
+            "$INSTALL" "$AUDIT" "$TYPECHECK" "$BUILD" "$BROWSERS" "$PLAYWRIGHT" "$ASSETS" "$WEBMOTION_LINT" "$WEBMOTION_SHOOT"
+          for state in "$INSTALL" "$AUDIT" "$TYPECHECK" "$BUILD" "$BROWSERS" "$PLAYWRIGHT" "$ASSETS" "$WEBMOTION_LINT" "$WEBMOTION_SHOOT"; do
+            if [ "$state" != "success" ]; then
+              echo "Release gate failed: $state"
+              exit 1
+            fi
+          done
