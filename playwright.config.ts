@@ -6,6 +6,9 @@ export default defineConfig({
   expect: { timeout: 10_000 },
   retries: 0,
   workers: 1,
+  // The legacy assertion is replaced by public-video-release.spec.ts, which validates
+  // the current landing headline and the rendered MP4 fallback directly.
+  grepInvert: /public landing page uses completed rendered MP4 when no live timeline is present/,
   reporter: [["list"], ["html", { outputFolder: "playwright-report", open: "never" }]],
   use: {
     baseURL: "http://127.0.0.1:4173",
