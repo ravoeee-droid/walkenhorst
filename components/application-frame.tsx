@@ -46,7 +46,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Pipeline", href: "/pipeline/b2b", icon: "pipeline" },
       { label: "Outreach", href: "/campaign-lab", icon: "send" },
       { label: "Studio", href: "/studio/b2b", icon: "video" },
-      { label: "Antworten", href: "/dashboard?section=inbox", section: "inbox", icon: "inbox" },
+      { label: "E-Mail", href: "/mail", icon: "inbox" },
       { label: "Calls", href: "/calls", icon: "phone" },
     ],
   },
@@ -72,7 +72,6 @@ const PUBLIC_PREFIXES = ["/v/", "/offer/", "/u/"];
 const DASHBOARD_PATHS = new Set(["/", "/dashboard"]);
 const SECTION_LABELS: Record<string, string> = {
   finder: "Lead Finder",
-  inbox: "Inbox",
 };
 
 function initials(user: User) {
