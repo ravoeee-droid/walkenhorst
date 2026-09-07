@@ -44,6 +44,7 @@ type Message = {
   from_email: string | null;
   subject: string | null;
   body_text: string | null;
+  body_html: string | null;
   provider_message_id: string | null;
   tracking_token: string | null;
   sent_at: string | null;
@@ -99,6 +100,14 @@ function percent(part: number, total: number) {
 
 function preview(text: string | null | undefined) {
   return String(text || "").replace(/\s+/g, " ").trim().slice(0, 140);
+}
+
+function safeMailPreviewHtml(html: string | null | undefined) {
+  if (!html) return "";
+  return String(html)
+    .replace(/<img\b[^>]*\/api\/t\/o\/[^>]*>/gi, "")
+    .replace(/href=(['"])[^'"]*\1/gi, 'href="#"')
+    .replace(/<script\b[\s\S]*?<\/script>/gi, "");
 }
 
 function messageStatus(message: Message) {
@@ -161,7 +170,7 @@ export function MailCenter() {
         let messageQuery = supabase
           .from("energy_messages")
           .select(`
-            id,lead_id,campaign_id,mailbox_id,direction,status,to_email,from_email,subject,body_text,
+            id,lead_id,campaign_id,mailbox_id,direction,status,to_email,from_email,subject,body_text,body_html,
             provider_message_id,tracking_token,sent_at,opened_at,clicked_at,replied_at,error,metadata,created_at,step_order,
             lead:energy_leads!energy_messages_lead_id_fkey(id,company_name,contact_name,contact_title,email,customer_type,status),
             mailbox:energy_mailboxes!energy_messages_mailbox_id_fkey(id,email_address,from_name,status,last_sync_at,last_error),
@@ -274,6 +283,7 @@ export function MailCenter() {
   const clicks = events.filter((event) => event.event_type === "click");
   const maxWatch = videoEvents.reduce((max, event) => Math.max(max, Number(event.watch_percent || 0)), 0);
   const attachments = Array.isArray(selected?.metadata?.attachments) ? selected?.metadata?.attachments : [];
+  const recipientPreview = selected?.direction === "outbound" ? safeMailPreviewHtml(selected.body_html) : "";
 
   return (
     <main className={styles.page}>
@@ -375,7 +385,7 @@ export function MailCenter() {
                 <div>
                   <div className={styles.detailKicker}>{selected.direction === "inbound" ? "Eingegangen" : "Ausgegangen"} · {dateTime(selected.sent_at || selected.created_at)}</div>
                   <h2>{selected.subject || "Ohne Betreff"}</h2>
-                  <p>{selected.direction === "inbound" ? `Von ${selected.from_email || "–"} an ${selected.to_email || "–"}` : `Von ${selected.from_email || "–"} an ${selected.to_email || "–"}`}</p>
+                  <p>Von {selected.from_email || "–"} an {selected.to_email || "–"}</p>
                 </div>
                 <span className={`${styles.detailStatus} ${styles[`tone_${messageStatus(selected).tone}`]}`}>{messageStatus(selected).label}</span>
               </div>
@@ -398,8 +408,17 @@ export function MailCenter() {
               )}
 
               <section className={styles.bodySection}>
-                <div className={styles.sectionTitle}><strong>Mailtext</strong>{selected.step_order ? <span>Sequenz Schritt {selected.step_order}</span> : null}</div>
-                <div className={styles.mailBody}>{selected.body_text || (selected.direction === "inbound" ? "Für ältere Eingangsmails wurde der Mailtext noch nicht gespeichert. Neue Mails werden vollständig synchronisiert." : "Kein Text gespeichert.")}</div>
+                <div className={styles.sectionTitle}>
+                  <strong>{recipientPreview ? "Empfängeransicht" : "Mailtext"}</strong>
+                  <span>{recipientPreview ? "Interne Vorschau · Klicks deaktiviert" : selected.step_order ? `Sequenz Schritt ${selected.step_order}` : ""}</span>
+                </div>
+                {recipientPreview ? (
+                  <div className={styles.htmlPreviewWrap} aria-label="Nicht klickbare Empfängeransicht">
+                    <iframe className={styles.htmlPreview} title="Empfängeransicht der E-Mail" sandbox="" srcDoc={recipientPreview} tabIndex={-1} />
+                  </div>
+                ) : (
+                  <div className={styles.mailBody}>{selected.body_text || (selected.direction === "inbound" ? "Für ältere Eingangsmails wurde der Mailtext noch nicht gespeichert. Neue Mails werden vollständig synchronisiert." : "Kein Text gespeichert.")}</div>
+                )}
               </section>
 
               {attachments.length > 0 && (
