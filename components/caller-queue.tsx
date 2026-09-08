@@ -17,11 +17,12 @@ const OUTCOMES:Array<{id:Outcome;label:string;className?:string}>=[
 ];
 function fmt(v:string|null|undefined){if(!v)return"—";try{return new Intl.DateTimeFormat("de-DE",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}).format(new Date(v))}catch{return"—"}}
 function due(f:Followup|undefined){return Boolean(f&&new Date(f.due_at).getTime()<=Date.now())}
+function isVideoFollowup(f:Followup|undefined){if(!f)return false;const value=`${f.title||""} ${f.reason||""}`.toLowerCase();return value.includes("video")||value.includes("watchtime")||value.includes("cta")}
 
 export function CallerQueue({user}:{user:User}){
   const supabase=useMemo(()=>createSupabaseBrowserClient(),[]);
   const [leads,setLeads]=useState<Lead[]>([]);const [followups,setFollowups]=useState<Followup[]>([]);const [activities,setActivities]=useState<Activity[]>([]);const [videos,setVideos]=useState<Video[]>([]);const [calls,setCalls]=useState<RinkelCall[]>([]);
-  const [selectedId,setSelectedId]=useState<string|null>(null);const [note,setNote]=useState("");const [callbackAt,setCallbackAt]=useState("");const [busy,setBusy]=useState(false);const [error,setError]=useState<string|null>(null);const [notice,setNotice]=useState<string|null>(null);
+  const [selectedId,setSelectedId]=useState<string|null>(null);const [note,setNote]=useState("");const [callbackAt,setCallbackAt]=useState("");const [busy,setBusy]=useState(false);const [error,setError]=useState<string|null>(null);const [notice,setNotice]=useState<string|null>(null);const [liveUpdatedAt,setLiveUpdatedAt]=useState<string|null>(null);
 
   const load=useCallback(async()=>{
     if(!supabase)return;
@@ -33,28 +34,41 @@ export function CallerQueue({user}:{user:User}){
       supabase.from("energy_video_pages").select("lead_id,slug,status").eq("user_id",user.id).neq("status","archived").limit(3000),
       supabase.from("energy_calls").select("id,lead_id,external_call_id,direction,from_phone,to_phone,answered_by,started_at,answered_at,ended_at,cause,recording_url,sentiment,topics,ai_summary,created_at,updated_at").eq("user_id",user.id).order("updated_at",{ascending:false}).limit(2000),
     ]);
-    if(l.error){setError(l.error.message);return}setLeads((l.data||[]) as Lead[]);if(!f.error)setFollowups((f.data||[]) as Followup[]);if(!a.error)setActivities((a.data||[]) as Activity[]);if(!v.error)setVideos((v.data||[]) as Video[]);if(!c.error)setCalls((c.data||[]) as RinkelCall[]);
+    if(l.error){setError(l.error.message);return}setLeads((l.data||[]) as Lead[]);if(!f.error)setFollowups((f.data||[]) as Followup[]);if(!a.error)setActivities((a.data||[]) as Activity[]);if(!v.error)setVideos((v.data||[]) as Video[]);if(!c.error)setCalls((c.data||[]) as RinkelCall[]);setLiveUpdatedAt(new Date().toISOString());
   },[supabase,user.id]);
   useEffect(()=>{void load()},[load]);
+  useEffect(()=>{
+    if(!supabase)return;
+    const refresh=()=>void load();
+    const channel=supabase.channel(`caller-queue-live:${user.id}`)
+      .on("postgres_changes",{event:"*",schema:"public",table:"energy_followups",filter:`user_id=eq.${user.id}`},refresh)
+      .on("postgres_changes",{event:"*",schema:"public",table:"energy_leads",filter:`user_id=eq.${user.id}`},refresh)
+      .on("postgres_changes",{event:"*",schema:"public",table:"energy_intent_events",filter:`user_id=eq.${user.id}`},refresh)
+      .subscribe();
+    const timer=window.setInterval(refresh,12000);
+    return()=>{window.clearInterval(timer);void supabase.removeChannel(channel)};
+  },[supabase,user.id,load]);
 
   const queue=useMemo(()=>{
     return leads.filter(l=>!["won","lost"].includes(l.status)&&l.phone&&(l.metadata as any)?.phone_status!=="invalid").map(l=>{
       const f=followups.find(x=>x.lead_id===l.id);
+      const videoSignal=isVideoFollowup(f);
       let priority=l.intent_score*3+l.total_score*2;
-      if(l.status==="engaged")priority+=350;if(l.status==="meeting")priority+=500;if(f?.priority==="hot")priority+=450;if(due(f))priority+=500;if(!l.last_contact_at)priority+=80;
+      if(videoSignal)priority+=1200;if(l.status==="engaged")priority+=350;if(l.status==="meeting")priority+=500;if(f?.priority==="hot")priority+=450;if(f?.priority==="high")priority+=240;if(due(f))priority+=500;if(!l.last_contact_at)priority+=80;
       const lastCall=calls.find(c=>c.lead_id===l.id);if(lastCall?.sentiment==="POSITIVE")priority+=220;
       const reason=f?.reason||f?.title||(lastCall?.sentiment==="POSITIVE"?"Rinkel AI: positives Gesprächssignal":l.intent_score>=70?`Intent ${l.intent_score}/100`:l.total_score>=75?`A-Lead ${l.total_score}/100`:l.next_action||"Outbound bereit");
-      return{lead:l,followup:f,priority,reason};
+      return{lead:l,followup:f,priority,reason,videoSignal};
     }).sort((a,b)=>b.priority-a.priority);
   },[leads,followups,calls]);
 
   useEffect(()=>{if(!selectedId&&queue.length)setSelectedId(queue[0].lead.id);if(selectedId&&!queue.some(q=>q.lead.id===selectedId))setSelectedId(queue[0]?.lead.id||null)},[queue,selectedId]);
   const selected=queue.find(q=>q.lead.id===selectedId)||queue[0]||null;
+  const viewerQueue=queue.filter(q=>q.videoSignal);
   const callsToday=activities.filter(a=>a.activity_type==="call_outcome").length;
   const meetingsToday=activities.filter(a=>a.activity_type==="call_outcome"&&(a.metadata as any)?.outcome==="meeting").length;
   const interestedToday=activities.filter(a=>a.activity_type==="call_outcome"&&["interested","meeting"].includes(String((a.metadata as any)?.outcome||""))).length;
   const rinkelToday=calls.filter(c=>c.started_at&&new Date(c.started_at).toDateString()===new Date().toDateString()).length;
-  const hot=queue.filter(q=>q.lead.intent_score>=70||q.followup?.priority==="hot").length;
+  const hot=queue.filter(q=>q.videoSignal||q.lead.intent_score>=70||q.followup?.priority==="hot").length;
   const selectedCalls=selected?calls.filter(c=>c.lead_id===selected.lead.id).slice(0,6):[];
 
   async function record(outcome:Outcome){
@@ -69,21 +83,23 @@ export function CallerQueue({user}:{user:User}){
   }
 
   return <main className="os-root" style={{minHeight:"100vh"}}><div className="os-content" style={{maxWidth:1400,margin:"0 auto",paddingTop:28}}>
-    <div className="os-section-head"><div><div className="os-kicker">Sales Execution</div><h1 className="os-title">Caller Queue</h1><p>Die stärksten Leads zuerst. Anrufen → Ergebnis klicken → nächster Lead.</p></div><div className="os-toolbar"><a className="os-btn" href="/dashboard">← Dashboard</a><a className="os-btn" href="/integrations">Rinkel Setup</a><button className="os-btn" disabled={busy} onClick={()=>void load()}>↻ Queue aktualisieren</button></div></div>
+    <div className="os-section-head"><div><div className="os-kicker">Sales Execution · Live</div><h1 className="os-title">Caller Queue</h1><p>Video-Viewer erscheinen automatisch ganz oben. Anrufen → Ergebnis klicken → nächster Lead.</p></div><div className="os-toolbar"><span className="os-pill green">● Live {liveUpdatedAt?`· ${fmt(liveUpdatedAt)}`:""}</span><a className="os-btn" href="/dashboard">← Dashboard</a><a className="os-btn" href="/integrations">Rinkel Setup</a><button className="os-btn" disabled={busy} onClick={()=>void load()}>↻ Queue aktualisieren</button></div></div>
     {error?<div className="os-error">{error}</div>:null}{notice?<div className="os-success">{notice}</div>:null}
-    <div className="os-grid os-kpis" style={{marginTop:18}}>{[[queue.length,"Call Queue","offene Kontakte"],[hot,"Hot Leads","Intent / Follow-up"],[callsToday,"Outcomes heute","manuell gespeichert"],[rinkelToday,"Rinkel Calls","heute erkannt"],[meetingsToday,"Termine heute",`${interestedToday} Interesse+`]].map(([v,l,s])=><div className="os-card os-kpi" key={String(l)}><div className="os-kpi-label">{l}</div><div className="os-kpi-value">{v}</div><div className="os-kpi-sub">{s}</div></div>)}</div>
+    {viewerQueue.length?<div className="os-card" style={{marginTop:16,padding:16,border:"2px solid rgba(255,107,22,.45)",background:"linear-gradient(135deg,rgba(255,107,22,.11),rgba(255,255,255,.98))"}}><div className="os-section-head" style={{margin:0}}><div><div className="os-kicker">🔥 Sofortige Verkaufschance</div><h2 style={{margin:"3px 0 4px"}}>{viewerQueue.length} {viewerQueue.length===1?"Lead hat":"Leads haben"} das Video angesehen</h2><p style={{margin:0}}>Diese Kontakte stehen automatisch ganz oben. Jetzt anrufen, solange Walkenhorst noch präsent ist.</p></div><button className="os-btn primary" onClick={()=>setSelectedId(viewerQueue[0].lead.id)}>📞 Ersten Viewer anrufen</button></div></div>:null}
+    <div className="os-grid os-kpis" style={{marginTop:18}}>{[[viewerQueue.length,"Video-Viewer","JETZT anrufen"],[queue.length,"Call Queue","offene Kontakte"],[hot,"Hot Leads","Intent / Follow-up"],[callsToday,"Outcomes heute","manuell gespeichert"],[meetingsToday,"Termine heute",`${interestedToday} Interesse+`]].map(([v,l,s])=><div className="os-card os-kpi" key={String(l)}><div className="os-kpi-label">{l}</div><div className="os-kpi-value">{v}</div><div className="os-kpi-sub">{s}</div></div>)}</div>
 
     <div className="os-columns" style={{gridTemplateColumns:"minmax(0,1.1fr) minmax(390px,.8fr)",marginTop:18}}>
-      <section className="os-card"><div className="os-section" style={{marginBottom:0}}><div className="os-section-head"><div><div className="os-kicker">Priorisiert</div><h2>Nächste Anrufe</h2></div><span className="os-pill hot">{queue.length}</span></div></div>
-        <div className="os-tablewrap"><table className="os-table"><thead><tr><th>Unternehmen</th><th>Score</th><th>Intent</th><th>Warum jetzt?</th><th>Letzter Call</th></tr></thead><tbody>{queue.slice(0,150).map(q=><tr key={q.lead.id} onClick={()=>setSelectedId(q.lead.id)} style={{cursor:"pointer",background:selected?.lead.id===q.lead.id?"rgba(255,107,22,.05)":undefined}}><td><strong>{q.lead.company_name}</strong><small style={{display:"block"}}>{q.lead.contact_name||q.lead.city||q.lead.industry||""}</small></td><td><div className="os-score">{q.lead.total_score}</div></td><td><span className={`os-pill ${q.lead.intent_score>=70?"hot":""}`}>{q.lead.intent_score}</span></td><td><strong>{q.reason}</strong>{q.followup?<small style={{display:"block"}}>fällig {fmt(q.followup.due_at)}</small>:null}</td><td>{fmt(calls.find(c=>c.lead_id===q.lead.id)?.started_at||q.lead.last_contact_at)}</td></tr>)}</tbody></table></div>
+      <section className="os-card"><div className="os-section" style={{marginBottom:0}}><div className="os-section-head"><div><div className="os-kicker">Automatisch priorisiert</div><h2>Nächste Anrufe</h2></div><span className="os-pill hot">{queue.length}</span></div></div>
+        <div className="os-tablewrap"><table className="os-table"><thead><tr><th>Unternehmen</th><th>Score</th><th>Intent</th><th>Warum jetzt?</th><th>Letzter Call</th></tr></thead><tbody>{queue.slice(0,150).map(q=><tr key={q.lead.id} onClick={()=>setSelectedId(q.lead.id)} style={{cursor:"pointer",background:q.videoSignal?"rgba(255,107,22,.09)":selected?.lead.id===q.lead.id?"rgba(255,107,22,.05)":undefined}}><td><strong>{q.lead.company_name}</strong><small style={{display:"block"}}>{q.lead.contact_name||q.lead.city||q.lead.industry||""}</small></td><td><div className="os-score">{q.lead.total_score}</div></td><td><span className={`os-pill ${q.videoSignal||q.lead.intent_score>=70?"hot":""}`}>{q.lead.intent_score}</span></td><td>{q.videoSignal?<span className="os-pill hot" style={{marginBottom:5}}>▶ VIDEO ANGESEHEN · JETZT ANRUFEN</span>:null}<strong style={{display:"block"}}>{q.reason}</strong>{q.followup?<small style={{display:"block"}}>fällig {fmt(q.followup.due_at)}</small>:null}</td><td>{fmt(calls.find(c=>c.lead_id===q.lead.id)?.started_at||q.lead.last_contact_at)}</td></tr>)}</tbody></table></div>
       </section>
 
       <aside className="os-grid" style={{alignSelf:"start",position:"sticky",top:18}}>{selected?<section className="os-card os-section">
-        <div className="os-section-head"><div><div className="os-kicker">Jetzt anrufen</div><h2>{selected.lead.company_name}</h2><p>{[selected.lead.contact_name,selected.lead.city,selected.lead.industry].filter(Boolean).join(" · ")}</p></div><div className="os-score">{selected.lead.total_score}</div></div>
+        {selected.videoSignal?<div className="os-callout" style={{marginBottom:14,border:"2px solid rgba(255,107,22,.45)",background:"rgba(255,107,22,.1)"}}><strong>🔥 VIDEO ANGESEHEN – JETZT ANRUFEN</strong><p style={{margin:"7px 0 0"}}>Der Lead hat gerade echtes Interesse gezeigt. Nicht auf später verschieben.</p></div>:null}
+        <div className="os-section-head"><div><div className="os-kicker">{selected.videoSignal?"Heißer Viewer":"Jetzt anrufen"}</div><h2>{selected.lead.company_name}</h2><p>{[selected.lead.contact_name,selected.lead.city,selected.lead.industry].filter(Boolean).join(" · ")}</p></div><div className="os-score">{selected.lead.total_score}</div></div>
         <div className="os-callout"><strong>Warum jetzt?</strong><p style={{margin:"7px 0 0"}}>{selected.reason}</p></div>
-        <div className="os-detail" style={{marginTop:12}}><div className="os-detail-row"><span>Telefon</span><strong>{selected.lead.phone}</strong></div><div className="os-detail-row"><span>Intent</span><strong>{selected.lead.intent_score}/100</strong></div><div className="os-detail-row"><span>Status</span><strong>{selected.lead.status}</strong></div><div className="os-detail-row"><span>Next Action</span><div>{selected.lead.next_action||"Anrufen"}</div></div></div>
-        <div className="os-callout" style={{marginTop:12}}><strong>Call Opener</strong><p style={{margin:"7px 0 0",lineHeight:1.55}}>{selected.lead.pitch||`Guten Tag, ich habe mir ${selected.lead.company_name} kurz angesehen und dabei einen möglichen Hebel bei Energie/PV gefunden. Passt es gerade für zwei Minuten?`}</p></div>
-        <div className="os-toolbar" style={{marginTop:14}}><a className="os-btn primary" style={{flex:1}} href={`tel:${selected.lead.phone}`}>📞 Jetzt anrufen</a>{videos.find(v=>v.lead_id===selected.lead.id)?<a className="os-btn" target="_blank" href={`/v/${videos.find(v=>v.lead_id===selected.lead.id)?.slug}`}>Video ↗</a>:null}</div>
+        <div className="os-detail" style={{marginTop:12}}><div className="os-detail-row"><span>Telefon</span><strong>{selected.lead.phone}</strong></div><div className="os-detail-row"><span>Intent</span><strong>{selected.lead.intent_score}/100</strong></div><div className="os-detail-row"><span>Status</span><strong>{selected.lead.status}</strong></div><div className="os-detail-row"><span>Next Action</span><div>{selected.videoSignal?"Sofort anrufen":selected.lead.next_action||"Anrufen"}</div></div></div>
+        <div className="os-callout" style={{marginTop:12}}><strong>Call Opener</strong><p style={{margin:"7px 0 0",lineHeight:1.55}}>{selected.videoSignal?`Guten Tag, hier ist Andreas Walkenhorst. Ich hatte Ihnen vorhin die kurze Videoanalyse zu ${selected.lead.company_name} geschickt und wollte einmal kurz persönlich nachfassen. Passt es gerade für zwei Minuten?`:selected.lead.pitch||`Guten Tag, ich habe mir ${selected.lead.company_name} kurz angesehen und dabei einen möglichen Hebel bei Energie/PV gefunden. Passt es gerade für zwei Minuten?`}</p></div>
+        <div className="os-toolbar" style={{marginTop:14}}><a className="os-btn primary" style={{flex:1}} href={`tel:${selected.lead.phone}`}>📞 Jetzt anrufen</a><a className="os-btn" href={`/leads/${selected.lead.id}`}>Lead-Akte</a>{videos.find(v=>v.lead_id===selected.lead.id)?<a className="os-btn" target="_blank" href={`/v/${videos.find(v=>v.lead_id===selected.lead.id)?.slug}`}>Video ↗</a>:null}</div>
         <div className="os-field"><label>Call Notiz</label><textarea value={note} onChange={e=>setNote(e.target.value)} placeholder="Einwand, Bedarf, Verbrauch, Zeitpunkt …"/></div>
         <div className="os-field"><label>Rückrufzeit</label><input type="datetime-local" value={callbackAt} onChange={e=>setCallbackAt(e.target.value)}/></div>
         <div className="os-grid" style={{gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,marginTop:12}}>{OUTCOMES.map(o=><button key={o.id} className={`os-btn ${o.className||""}`} disabled={busy} onClick={()=>void record(o.id)}>{o.label}</button>)}</div>
