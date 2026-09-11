@@ -1,7 +1,7 @@
 {
   "contractVersion": "1.0.0",
   "instance": "CLIENT-WALKENHORST",
-  "updatedAt": "2026-08-27",
+  "updatedAt": "2026-09-11",
   "policy": "same-task-adapt-both-directions",
   "status": "reference-audit-required-for-existing-drift",
   "sharedSurfaces": {
@@ -13,7 +13,8 @@
     "leadDetailWorkspace": "current-reference",
     "salesBrief": "current-reference",
     "applicationFrame": "current-reference-adapt-not-copy",
-    "studioGenericV3": "current-reference"
+    "studioGenericV3": "current-reference",
+    "autopilotOssIntelligence": "experimental-peer-branch-adapted-no-runtime-data-shared"
   },
   "rules": [
     "Shared product improvements must be adapted to the peer instance in the same task.",
