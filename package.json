@@ -22,7 +22,9 @@
     "puppeteer-core": "25.1.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "tus-js-client": "4.3.1"
+    "tus-js-client": "4.3.1",
+    "@aws-sdk/client-s3": "3.913.0",
+    "@aws-sdk/s3-request-presigner": "3.913.0"
   },
   "devDependencies": {
     "@playwright/test": "1.62.1",
