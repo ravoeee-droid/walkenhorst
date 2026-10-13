@@ -9,7 +9,7 @@ export async function POST(req: NextRequest) {
   const token = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
   if (!supabaseUrl || !supabaseAnon) return NextResponse.json({ error: "Supabase auth unavailable" }, { status: 503 });
   const supabase = createClient(supabaseUrl, supabaseAnon, { auth: { persistSession: false } });
   const { data: { user }, error } = await supabase.auth.getUser(token);
