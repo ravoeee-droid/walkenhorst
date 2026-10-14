@@ -20,6 +20,8 @@ permissions:
 
 jobs:
   render:
+    # Walkenhorst: keep video rendering disabled while restoring CRM/Auth.
+    if: ${{ false }}
     strategy:
       fail-fast: false
       max-parallel: 8
