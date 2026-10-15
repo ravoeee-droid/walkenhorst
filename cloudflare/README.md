@@ -21,3 +21,7 @@ Install pinned dependencies with `npm ci`; run `npm test`, `npm run build`, then
 Do not commit or upload `private`, `.wrangler`, credentials, exports, password hashes or `import.sql`. Database import is a one-time operation against an empty destination; never rerun on live data. `scripts/create-import.mjs` and `verify-import.mjs` enforce the source inventory. `scripts/cleanup-verification.mjs` only matches the named synthetic test ID.
 
 The shared CRM form fix captures the form before awaiting authentication. Shared-core peer parity is explicitly pending in the root status file; peer runtime and data were untouched.
+
+## Synthetic landing-page playback test
+
+`/v/erster-flow/` is a public, synthetic preview without customer data, presenter footage, sound, tracking or messages. Its CTA only displays a local confirmation. Generate the 18-second MP4 and poster with `scripts/create-demo.py` before building (requires Pillow and `imageio-ffmpeg==0.6.0` in `private/video-runtime`). Generated media is ignored by Git and served as small static assets, independently of the blocked source Supabase storage. This does not enable bulk media uploads, automatic rendering or production outreach.
