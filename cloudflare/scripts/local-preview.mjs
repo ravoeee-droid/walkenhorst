@@ -1,0 +1,11 @@
+import http from 'node:http';
+import {DatabaseSync} from 'node:sqlite';
+import {readFile,stat} from 'node:fs/promises';
+import {readFileSync} from 'node:fs';
+import path from 'node:path';
+import {randomBytes} from 'node:crypto';
+import worker from '../src/worker.mjs';
+const db=new DatabaseSync(':memory:');
+for(const file of ['migrations/0001_crm.sql','migrations/0002_auth_cleanup.sql','private/import.sql'])db.exec(readFileSync(file,'utf8'));
+const env={SESSION_SECRET:randomBytes(32).toString('hex'),DB:{prepare(sql){return{bind(...values){return{async first(){return db.prepare(sql).get(...values)||null},async all(){return{results:db.prepare(sql).all(...values)}},async run(){return db.prepare(sql).run(...values)}}}}},async batch(queries){db.exec('BEGIN');try{const result=[];for(const query of queries)result.push(await query.run());db.exec('COMMIT');return result}catch(e){db.exec('ROLLBACK');throw e}}},ASSETS:{async fetch(request){const url=new URL(request.url),base=path.resolve('dist'),file=path.resolve(base,'.'+decodeURIComponent(url.pathname));if(!file.startsWith(base+path.sep))return new Response('Not found',{status:404});let target=file;try{if(!(await stat(target)).isFile())target=path.join(base,'index.html')}catch{target=path.join(base,'index.html')}const ext=path.extname(target);const types={'.html':'text/html;charset=utf-8','.js':'application/javascript;charset=utf-8','.css':'text/css;charset=utf-8','.svg':'image/svg+xml','.png':'image/png'};return new Response(await readFile(target),{headers:{'content-type':types[ext]||'application/octet-stream'}})}}};
+http.createServer(async(req,res)=>{try{const chunks=[];for await(const chunk of req)chunks.push(chunk);const init={method:req.method,headers:req.headers};if(!['GET','HEAD'].includes(req.method))init.body=Buffer.concat(chunks);const response=await worker.fetch(new Request('http://127.0.0.1:8788'+req.url,init),env);res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()))}catch{res.writeHead(500);res.end('Local preview failed')}}).listen(8788,'127.0.0.1',()=>console.log('Walkenhorst local migration preview ready at http://127.0.0.1:8788'));

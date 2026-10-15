@@ -1,0 +1,6 @@
+node_modules/
+dist/
+build-worker/
+.wrangler/
+.dev.vars
+private/

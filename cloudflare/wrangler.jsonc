@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "walkenhorst",
+  "main": "build-worker/worker.js",
+  "no_bundle": true,
+  "compatibility_date": "2026-10-14",
+  "compatibility_flags": ["nodejs_compat"],
+  "account_id": "a8f679cc3531e121c635b5da28c7cba6",
+  "workers_dev": true,
+  "assets": { "directory": "dist", "binding": "ASSETS", "not_found_handling": "single-page-application", "run_worker_first": ["/auth/*", "/rest/*", "/functions/*", "/storage/*", "/api/*"] },
+  "d1_databases": [{"binding":"DB","database_name":"walkenhorst-crm","database_id":"366f5ce7-f566-45b3-ac71-c6c9ca127a9f","migrations_dir":"migrations"}],
+  "vars": {"MAX_DATA_BYTES":"200000000","MEDIA_WRITES_ENABLED":"false"},
+  "observability": {"enabled":true}
+}

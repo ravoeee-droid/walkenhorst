@@ -1,0 +1,15 @@
+CREATE TABLE wh_users (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE, password_hash TEXT NOT NULL, user_json TEXT NOT NULL CHECK(json_valid(user_json)), disabled INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE wh_sessions (token_hash TEXT PRIMARY KEY, refresh_hash TEXT NOT NULL UNIQUE, user_id TEXT NOT NULL REFERENCES wh_users(id), expires_at INTEGER NOT NULL, refresh_expires_at INTEGER NOT NULL);
+CREATE INDEX wh_sessions_user ON wh_sessions(user_id);
+CREATE TABLE wh_tables (name TEXT PRIMARY KEY, writable INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE wh_records (table_name TEXT NOT NULL REFERENCES wh_tables(name), id TEXT NOT NULL, owner_id TEXT NOT NULL, row_json TEXT NOT NULL CHECK(json_valid(row_json)), PRIMARY KEY(table_name,id));
+CREATE INDEX wh_records_owner ON wh_records(table_name,owner_id);
+CREATE INDEX wh_records_lead ON wh_records(table_name,owner_id,json_extract(row_json,'$.lead_id'));
+CREATE TABLE wh_limits (id INTEGER PRIMARY KEY CHECK(id=1), data_bytes INTEGER NOT NULL DEFAULT 0, max_bytes INTEGER NOT NULL DEFAULT 200000000);
+INSERT INTO wh_limits(id) VALUES(1);
+CREATE TRIGGER wh_record_insert_limit BEFORE INSERT ON wh_records WHEN (SELECT data_bytes+length(CAST(NEW.row_json AS BLOB))>max_bytes FROM wh_limits WHERE id=1) BEGIN SELECT RAISE(ABORT,'CRM storage budget reached; media storage remains disabled'); END;
+CREATE TRIGGER wh_record_update_limit BEFORE UPDATE ON wh_records WHEN (SELECT data_bytes+length(CAST(NEW.row_json AS BLOB))-length(CAST(OLD.row_json AS BLOB))>max_bytes FROM wh_limits WHERE id=1) BEGIN SELECT RAISE(ABORT,'CRM storage budget reached; media storage remains disabled'); END;
+CREATE TRIGGER wh_record_insert_size AFTER INSERT ON wh_records BEGIN UPDATE wh_limits SET data_bytes=data_bytes+length(CAST(NEW.row_json AS BLOB)) WHERE id=1; END;
+CREATE TRIGGER wh_record_update_size AFTER UPDATE ON wh_records BEGIN UPDATE wh_limits SET data_bytes=data_bytes+length(CAST(NEW.row_json AS BLOB))-length(CAST(OLD.row_json AS BLOB)) WHERE id=1; END;
+CREATE TRIGGER wh_record_delete_size AFTER DELETE ON wh_records BEGIN UPDATE wh_limits SET data_bytes=data_bytes-length(CAST(OLD.row_json AS BLOB)) WHERE id=1; END;
+CREATE TABLE wh_login_limits (key TEXT PRIMARY KEY, attempts INTEGER NOT NULL, window_start INTEGER NOT NULL);

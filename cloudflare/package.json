@@ -1,0 +1,1 @@
+{"name":"walkenhorst-cloudflare","private":true,"type":"module","scripts":{"build":"vite build","dev":"vite","test":"node --test test/*.test.mjs","preview":"wrangler dev","deploy":"wrangler deploy"},"devDependencies":{"vite":"8.3.4","wrangler":"4.151.0","bcryptjs":"3.0.3"}}
