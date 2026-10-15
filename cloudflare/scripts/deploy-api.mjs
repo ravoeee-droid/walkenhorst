@@ -3,8 +3,8 @@ import {createHash,randomBytes} from 'node:crypto';
 import path from 'node:path';
 import {api,database} from './cloud-api.mjs';
 const manifest={},files=new Map();
-const types={'.html':'text/html;charset=utf-8','.js':'application/javascript;charset=utf-8','.css':'text/css;charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon','.woff2':'font/woff2','.json':'application/json'};
-async function walk(dir,prefix=''){for(const item of await readdir(dir,{withFileTypes:true})){const relative=prefix+'/'+item.name,file=path.join(dir,item.name);if(item.isDirectory())await walk(file,relative);else{const bytes=await readFile(file),hash=createHash('md5').update(bytes).digest('hex');manifest[relative]={hash,size:bytes.length};files.set(hash,{bytes,name:item.name,type:types[path.extname(item.name)]||'application/octet-stream'});}}}
+const types={'.mp4':'video/mp4','.jpg':'image/jpeg','.html':'text/html;charset=utf-8','.js':'application/javascript;charset=utf-8','.css':'text/css;charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon','.woff2':'font/woff2','.json':'application/json'};
+async function walk(dir,prefix=''){for(const item of await readdir(dir,{withFileTypes:true})){const relative=prefix+'/'+item.name,file=path.join(dir,item.name);if(item.isDirectory())await walk(file,relative);else{const bytes=await readFile(file),hash=createHash('md5').update(bytes).update(['.mp4','.jpg'].includes(path.extname(item.name))?types[path.extname(item.name)]:'').digest('hex');manifest[relative]={hash,size:bytes.length};files.set(hash,{bytes,name:item.name,type:types[path.extname(item.name)]||'application/octet-stream'});}}}
 await walk('dist');
 if(Object.keys(manifest).some(x=>/private|import\.sql|users\.json|\.map$/.test(x)))throw Error('Unsafe public asset');
 const session=await api('/workers/scripts/walkenhorst/assets-upload-session',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({manifest})});
@@ -17,4 +17,5 @@ const deployed=await api('/workers/scripts/walkenhorst',{method:'PUT',body:form}
 await api('/workers/scripts/walkenhorst/subdomain',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({enabled:true,previews_enabled:false})});
 const subdomain={subdomain:'ravoeee'};
 const result={version:deployed.deployment_id||deployed.id,url:'https://walkenhorst.'+subdomain.subdomain+'.workers.dev',assets:Object.keys(manifest).length};await writeFile('private/deployment.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result));
+
 
